@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""Print the full starting context for a node. Usage: ops/brief client#15"""
+import sys
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+from lib import OPS, REPOS, STATE, config, last_handoff, load_nodes, load_state
+
+
+def build(node, feedback=None):
+    handoff_file = STATE / (node.id.replace("#", "-") + ".handoff.md")
+    parts = [(OPS / "prompts/worker.md").read_text(),
+             f"## This node\n{node.id} in {REPOS[node.repo]}: {node.title}\nAgent: {node.agent}\n"
+             f"Handoff file: {handoff_file}\n\n{node.body}"]
+    previous = last_handoff(node)
+    if previous:
+        parts.append("## Handoff from the previous session\n" + previous)
+    dead_ends = load_state(node.id)["dead_ends"]
+    if dead_ends:
+        parts.append("## Dead ends\n" + "\n".join(f"- {d}" for d in dead_ends))
+    if feedback:
+        parts.append("## Gate feedback from your last attempt\nFix this and only this.\n" + feedback)
+    return "\n\n".join(parts)
+
+
+if __name__ == "__main__":
+    print(build(load_nodes(ttl=0)[sys.argv[1]]))

@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Kill switch. `ops/stop` halts ops/run after handing work back; `ops/stop --clear` re-enables it."""
+import sys
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+from lib import STOP_FILE
+
+if "--clear" in sys.argv:
+    STOP_FILE.unlink(missing_ok=True)
+    print("runner enabled")
+else:
+    STOP_FILE.touch()
+    print("stop requested")

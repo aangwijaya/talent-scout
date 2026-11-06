@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Keep the client's pinned contract current. `--check` exits 1 when the server has moved."""
+import hashlib
+import json
+import sys
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+from lib import REPOS, ROOT, gh, sh
+
+FILES = {"docs/API.md": "docs/API.md", "docs/EVENTS.md": "docs/EVENTS.md", "docs/PRD.md": "docs/PRD.md",
+         "api/openapi.yaml": "src/lib/server/api/openapi.yaml"}
+SERVER = ROOT / "talent-scout-server"
+CLIENT = ROOT / "talent-scout-client"
+
+
+def digest(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def server_files(commit):
+    return {path: sh(["git", "show", f"{commit}:{path}"], cwd=SERVER).stdout for path in FILES}
+
+
+def main():
+    sh(["git", "fetch", "-q", "origin"], cwd=SERVER)
+    sh(["git", "fetch", "-q", "origin"], cwd=CLIENT)
+    head = sh(["git", "rev-parse", "origin/main"], cwd=SERVER).stdout.strip()
+    contents = server_files(head)
+    hashes = {FILES[path]: digest(text) for path, text in contents.items()}
+    current = sh(["git", "show", "origin/main:contract.lock"], cwd=CLIENT, check=False)
+    locked = json.loads(current.stdout)["files"] if current.returncode == 0 else {}
+    if locked == hashes:
+        return 0
+    if "--check" in sys.argv:
+        return 1
+    wt = ROOT / "wt" / f"client-contract-{head[:8]}"
+    branch = f"contract/{head[:8]}"
+    sh(["git", "worktree", "add", "-q", str(wt), "-b", branch, "--no-track", "origin/main"], cwd=CLIENT)
+    for path, text in contents.items():
+        (wt / FILES[path]).write_text(text)
+    (wt / "contract.lock").write_text(json.dumps({"server_commit": head, "files": hashes}, indent=2) + "\n")
+    sh(["git", "add", "-A"], cwd=wt)
+    sh(["git", "commit", "-qm", f"chore: pin contract to server {head[:8]}"], cwd=wt)
+    sh(["git", "push", "-q", "-u", "origin", "HEAD"], cwd=wt)
+    gh("pr", "create", "-R", REPOS["client"], "--head", branch, "--title", f"chore: pin contract to server {head[:8]}",
+       "--body", f"Byte-identical copy of the contract at {REPOS['server']}@{head}. Approval happened on the server.")
+    sh(["git", "worktree", "remove", "--force", str(wt)], cwd=CLIENT)
+    print(f"opened sync PR for {head[:8]}")
+    return 0
+
+
+sys.exit(main())

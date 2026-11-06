@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""One digest of everything waiting on a human, plus repeated lessons.
+
+ops/triage          print the digest
+ops/triage --apply  also open skill-update nodes for repeated lessons that have no follow-up PR
+"""
+import re
+import sys
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+from lib import REPOS, ROOT, analyze, gh, last_handoff, load_nodes, parse_handoff, sh
+
+
+def repeated_lessons(text):
+    """Return lesson titles marked as repeats whose follow-up names no PR."""
+    found = []
+    for entry in re.split(r"^### ", text, flags=re.M)[1:]:
+        repeated = re.search(r"\*\*Repeated\?:\*\*\s*(.*)", entry)
+        follow_up = re.search(r"\*\*Follow-up:\*\*\s*(.*)", entry)
+        if repeated and "same" in repeated.group(1).lower():
+            done = follow_up and re.search(r"PR #\d+", follow_up.group(1)) and "pending" not in follow_up.group(1)
+            if not done:
+                found.append(entry.splitlines()[0].strip())
+    return found
+
+
+def main():
+    nodes = load_nodes(ttl=0)
+    graph = analyze(nodes)
+    print("WAITING ON YOU")
+    for key in graph["human"]:
+        node = nodes[key]
+        previous = last_handoff(node)
+        ask = parse_handoff(previous).get("NEXT", "") if previous else ""
+        print(f"  {key} {node.title[:60]}" + (f"\n    {ask[:200]}" if ask else ""))
+    if graph["unmapped"]:
+        print("NO NODE BLOCK: " + ", ".join(graph["unmapped"]))
+    if graph["cycles"]:
+        print("CYCLES: " + ", ".join(graph["cycles"]))
+    print(f"READY {len(graph['ready'])}, ACTIVE {len(graph['active'])}, WAITING {len(graph['waiting'])}")
+    for repo, full in REPOS.items():
+        lessons = sh(["git", "show", "origin/main:docs/LESSONS.md"], cwd=ROOT / f"talent-scout-{repo}", check=False).stdout
+        repeats = repeated_lessons(lessons)
+        if not repeats:
+            continue
+        print(f"REPEATED LESSONS in {repo}: {len(repeats)}")
+        for title in repeats:
+            print(f"  {title}")
+        if "--apply" in sys.argv and not any(n.has("skill-update") and n.repo == repo and not n.closed for n in nodes.values()):
+            agent = "claude" if repo == "client" else "opencode"
+            listing = "\n".join(f"- {t}" for t in repeats)
+            body = (f"Turn these repeated lessons into a check, lint rule, or rule change, in that order of preference:\n\n"
+                    f"{listing}\n\n```yaml\nfence: [docs/*, .claude/*, .opencode/*, CLAUDE.md, AGENTS.md, scripts/*, .github/*]\n"
+                    f"blocked_by: []\nchecks: []\nred: false\n```\n")
+            gh("issue", "create", "-R", full, "--title", "Apply repeated lessons", "--body", body, "--label", "skill-update",
+               "--label", "type:gap", "--label", f"agent:{agent}", "--label", "status:todo")
+
+
+main()

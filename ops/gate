@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Run the exit gate on a worktree. Usage: ops/gate client#15 [worktree] [--no-green]"""
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+from checks import gate
+from lib import ROOT, STATE, config, load_nodes
+
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+node = load_nodes()[args[0]]
+wt = args[1] if len(args) > 1 else ROOT / "wt" / args[0].replace("#", "-")
+handoff = STATE / (args[0].replace("#", "-") + ".handoff.md")
+text = handoff.read_text() if handoff.exists() else ""
+result = gate(node, wt, config(), text, run_green="--no-green" not in sys.argv)
+print(json.dumps(result, indent=1))
+sys.exit(1 if result["failures"] else 0)

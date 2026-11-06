@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Orchestrator: next -> worktree -> agent -> gate -> PR -> CI -> review -> merge or escalate.
+
+ops/run [--repo client|server] [--node client#15] [--once] [--auto]
+Without --auto every outward step asks first. Run one process per repo for parallel work.
+"""
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import importlib.machinery
+import importlib.util
+
+from checks import feedback, gate, saw_key
+from lib import (AGENTS, HANDOFF_MARK, OPS, REPOS, ROOT, STATE, STOP_FILE, analyze, config, gh,
+                 load_nodes, load_state, parse_handoff, save_state, sh)
+
+_loader = importlib.machinery.SourceFileLoader("brief", str(OPS / "brief"))
+_spec = importlib.util.spec_from_loader("brief", _loader)
+_brief = importlib.util.module_from_spec(_spec)
+_loader.exec_module(_brief)
+
+AUTO = "--auto" in sys.argv
+CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm:*)", "Bash(go:*)", "Bash(gofmt:*)",
+                "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)", "Bash(git diff:*)",
+                "Bash(git log:*)", "Bash(git show:*)", "Bash(gh issue view:*)", "Bash(gh issue list:*)",
+                "Bash(gh issue create:*)", "Bash(gh issue comment:*)", "Bash(rg:*)", "Bash(ls:*)"]
+
+
+class Stop(Exception):
+    pass
+
+
+def confirm(step):
+    if STOP_FILE.exists():
+        raise Stop("stop requested")
+    if not AUTO and input(f"{step} [y/N] ").strip().lower() != "y":
+        raise Stop(f"declined: {step}")
+
+
+def run_agent(agent, prompt, wt, cfg, read_only=False):
+    if agent == "claude":
+        claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+        tools = ["Read", "Glob", "Grep"] if read_only else CLAUDE_TOOLS
+        cmd = [claude, "-p", prompt, "--max-budget-usd", str(cfg["budget_usd"]),
+               "--no-session-persistence", "--allowedTools", *tools]
+        if not read_only:
+            cmd += ["--permission-mode", "acceptEdits"]
+    else:
+        cmd = ["opencode", "run", prompt] + (["--agent", "plan"] if read_only else [])
+    log = STATE / f"{Path(wt).name}.log"
+    capture = tempfile.TemporaryFile("w+")
+    with open(log, "a") as errors:
+        child = subprocess.Popen(cmd, cwd=wt, stdout=capture, stderr=errors, text=True, start_new_session=True)
+        deadline = time.time() + cfg["timeout_min"] * 60
+        while child.poll() is None:
+            if STOP_FILE.exists() or time.time() > deadline:
+                os.killpg(child.pid, signal.SIGTERM)
+                child.wait(30)
+                capture.close()
+                raise Stop("stop requested" if STOP_FILE.exists() else "time budget spent")
+            time.sleep(3)
+        capture.seek(0)
+        text = capture.read()
+        capture.close()
+        errors.write(text)
+    return child.returncode, text
+
+
+def prepare(node):
+    wt = ROOT / "wt" / f"{node.repo}-{node.number}"
+    checkout = ROOT / f"talent-scout-{node.repo}"
+    sh(["git", "fetch", "-q", "origin"], cwd=checkout)
+    if not wt.exists():
+        slug = re.sub(r"[^a-z0-9]+", "-", node.title.lower())[:30].strip("-")
+        sh(["git", "worktree", "add", "-q", str(wt), "-b", f"node/{node.number}-{slug}",
+            "--no-track", "origin/main"], cwd=checkout)
+        agent_env = OPS / "env" / f"{node.repo}.env.agent"
+        if agent_env.exists():
+            shutil.copy2(agent_env, wt / ".env")
+        if node.repo == "client":
+            sh(["pnpm", "install", "--frozen-lockfile"], cwd=wt, timeout=600)
+    return wt
+
+
+def set_status(node, new):
+    gh("issue", "edit", str(node.number), "-R", REPOS[node.repo], "--add-label", new,
+       *[arg for label in node.labels if label.startswith("status:") and label != new
+         for arg in ("--remove-label", label)])
+    node.labels = [l for l in node.labels if not l.startswith("status:")] + [new]
+
+
+def post_handoff(node, text):
+    gh("issue", "comment", str(node.number), "-R", REPOS[node.repo],
+       "--body", f"{HANDOFF_MARK}\n{text.strip()}")
+
+
+def escalate(node, reason, feedback_text=""):
+    post_handoff(node, f"STATUS: needs_human\nNEXT: {reason}\nKNOWN: {feedback_text or 'see the run log'}")
+    gh("issue", "edit", str(node.number), "-R", REPOS[node.repo], "--add-label", "needs:human")
+    print(f"{node.id}: escalated: {reason}")
+
+
+def add_gaps(node, gaps):
+    """Add gap issues as blockers, so the graph reschedules this node after them."""
+    ids = re.findall(r"(?:client|server)#\d+", gaps)
+    current = node.block.get("blocked_by", [])
+    merged = ", ".join(dict.fromkeys(current + ids))
+    body = re.sub(r"^blocked_by:.*$", f"blocked_by: [{merged}]", node.body, flags=re.M)
+    gh("issue", "edit", str(node.number), "-R", REPOS[node.repo], "--body", body)
+    return ids
+
+
+def wait_ci(node, branch, cfg):
+    full = REPOS[node.repo]
+    deadline = time.time() + cfg["ci_wait_min"] * 60
+    time.sleep(20)
+    while time.time() < deadline:
+        if STOP_FILE.exists():
+            raise Stop("stop requested")
+        raw = sh(["gh", "pr", "checks", branch, "-R", full, "--json", "name,bucket"], check=False).stdout
+        checks = json.loads(raw or "[]")
+        if checks and all(c["bucket"] != "pending" for c in checks):
+            bad = [c["name"] for c in checks if c["bucket"] == "fail"]
+            return [{"check": "ci", "expected": "all PR checks pass", "saw": f"failed: {bad}"}] if bad else []
+        time.sleep(60)
+    return [{"check": "ci", "expected": "CI finishes", "saw": "timed out"}]
+
+
+def independent_review(node, wt, cfg):
+    """A fresh session of the other agent, given only the issue and the diff."""
+    diff = sh(["git", "diff", "origin/main...HEAD"], cwd=wt).stdout
+    prompt = f"{(OPS / 'prompts/review.md').read_text()}\n\n## Issue\n{node.body}\n\n## Diff\n{diff}"
+    reviewer = "claude" if AGENTS[node.repo] == "opencode" else "opencode"
+    code, text = run_agent(reviewer, prompt, wt, cfg, read_only=True)
+    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text, re.S)
+    if code or not blocks:
+        return None
+    return json.loads(blocks[-1])["findings"]
+
+
+def process(node, cfg):
+    wt = prepare(node)
+    state = load_state(node.id)
+    handoff_file = STATE / (node.id.replace("#", "-") + ".handoff.md")
+    set_status(node, "status:in-progress")
+    note = state.get("feedback")
+    while True:
+        if state["attempts"] >= cfg["max_attempts"]:
+            return escalate(node, "attempt budget spent", note or "")
+        state["attempts"] += 1
+        save_state(node.id, state)
+        handoff_file.unlink(missing_ok=True)
+        run_agent(node.agent, _brief.build(node, note), wt, cfg)
+        text = handoff_file.read_text() if handoff_file.exists() else ""
+        fields = parse_handoff(text)
+        status = fields.get("STATUS", "").split(" ")[0]
+        if status == "gap":
+            post_handoff(node, text)
+            add_gaps(node, fields.get("GAPS", ""))
+            set_status(node, "status:todo")
+            return print(f"{node.id}: parked behind {fields.get('GAPS')}")
+        if status == "needs_human":
+            post_handoff(node, text)
+            return escalate(node, fields.get("NEXT", "decision needed"))
+        result = gate(node, wt, cfg, text)
+        failures = result["failures"]
+        if not failures:
+            confirm(f"{node.id}: gate passed (tier {result['tier']}). Push and open a PR")
+            branch = sh(["git", "branch", "--show-current"], cwd=wt).stdout.strip()
+            sh(["git", "push", "-q", "-u", "origin", "HEAD"], cwd=wt)
+            existing = sh(["gh", "pr", "view", branch, "-R", REPOS[node.repo], "--json", "number"], check=False)
+            if existing.returncode:
+                credit = "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)" if node.agent == "claude" else ""
+                gh("pr", "create", "-R", REPOS[node.repo], "--head", branch, "--title", node.title,
+                   "--body", f"Closes #{node.number}\n\nTier {result['tier']}.\n\n{text}{credit}")
+            set_status(node, "status:review")
+            failures = wait_ci(node, branch, cfg)
+        if not failures and result["tier"] >= 2:
+            findings = independent_review(node, wt, cfg)
+            if findings is None:
+                return escalate(node, "independent review did not return findings")
+            high = [f for f in findings if f.get("severity") == "High"]
+            failures = [{"check": "review", "expected": "no High findings", "saw": f"{f['file']}: {f['summary']}"} for f in high]
+        if not failures:
+            post_handoff(node, text)
+            if result["tier"] in cfg["automerge"]:
+                gh("pr", "merge", branch, "-R", REPOS[node.repo], "--merge", "--delete-branch")
+                return print(f"{node.id}: merged")
+            return escalate(node, f"Tier {result['tier']} PR is green and reviewed. Merge when you agree.")
+        key = saw_key(failures)
+        note = feedback(failures, node.block, state["dead_ends"])
+        if key in state["saws"]:
+            return escalate(node, "the same SAW came back twice", note)
+        state["saws"].append(key)
+        state["dead_ends"].append(fields.get("TRIED", "")[:300])
+        state["feedback"] = note
+        save_state(node.id, state)
+
+
+def main():
+    argv = sys.argv
+    only = argv[argv.index("--node") + 1] if "--node" in argv else None
+    repo = argv[argv.index("--repo") + 1] if "--repo" in argv else None
+    cfg = config()
+    while not STOP_FILE.exists():
+        if sh([str(OPS / "contract-sync"), "--check"], check=False).returncode:
+            confirm("The server contract moved. Open the client sync PR")
+            sh([str(OPS / "contract-sync")])
+        nodes = load_nodes(ttl=0)
+        graph = analyze(nodes)
+        ready = [k for k in graph["ready"] if nodes[k].agent in ("claude", "opencode")]
+        ready = [k for k in ready if (k == only if only else (not repo or nodes[k].repo == repo))]
+        if not ready:
+            print("nothing ready")
+            return
+        node = nodes[ready[0]]
+        try:
+            confirm(f"Start {node.id}: {node.title}")
+            process(node, cfg)
+        except Stop as stop:
+            post_handoff(node, f"STATUS: needs_human\nNEXT: resume with ops/run --node {node.id}\nKNOWN: {stop}")
+            set_status(node, "status:todo")
+            print(f"{node.id}: handed back: {stop}")
+            return
+        if "--once" in argv or only:
+            return
+
+
+if __name__ == "__main__":
+    main()

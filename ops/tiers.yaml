@@ -1,0 +1,12 @@
+# Undo-cost tiers. ops/gate computes the tier from changed paths: any tier3 match wins,
+# all-tier1 stays tier 1, everything else is tier 2.
+tier3: [docs/API.md, docs/EVENTS.md, docs/PRD.md, api/openapi.yaml, contract.lock, src/hooks.server.ts, src/lib/server/session.ts, src/lib/server/guards.ts, internal/store/migrations/*, internal/http/middleware/auth*, internal/auth/*, internal/email/*, cmd/migrate/*, cmd/seed/*, config/seed-job.yaml, Dockerfile, vercel.json, .github/*, CLAUDE.md, AGENTS.md, .claude/*, .opencode/*, opencode.json]
+tier1: [*.md, docs/*, *.test.ts, *.spec.ts, *.e2e.ts, *_test.go, testdata/*]
+# Always allowed outside a node's fence.
+always_allowed: [docs/LESSONS.md, pnpm-lock.yaml, go.sum, go.mod, package.json]
+# Pilot: nothing merges by itself. Open tier 1, then tier 2, after the pilot targets pass.
+automerge: []
+budget_usd: 3
+timeout_min: 40
+max_attempts: 3
+ci_wait_min: 20

@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Compute what can run now. Usage: ops/next [--json]"""
+import json
+import sys
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+from lib import analyze, load_nodes
+
+nodes = load_nodes()
+graph = analyze(nodes)
+if "--json" in sys.argv:
+    print(json.dumps(graph, indent=1))
+    sys.exit(0)
+for name in ("cycles", "unmapped", "human", "active"):
+    if graph[name]:
+        print(f"{name.upper()}: " + ", ".join(graph[name]))
+print("READY (in order):")
+for key in graph["ready"]:
+    print(f"  {key} [{nodes[key].agent}] {nodes[key].title[:70]}")
+print("WAITING:")
+for item in graph["waiting"]:
+    print(f"  {item['id']} on {', '.join(item['on']) or 'a cycle'}")
