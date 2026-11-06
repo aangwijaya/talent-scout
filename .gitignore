@@ -1,0 +1,19 @@
+# App repos and worktrees are separate git checkouts
+/talent-scout-client/
+/talent-scout-server/
+/wt/
+
+# Secrets and runner state
+.env
+.env.*
+!.env.example
+/ops/env/*
+!/ops/env/*.example
+/ops/.cache/
+/ops/.state/
+/ops/STOP
+
+# Large or local files
+/design-refs/relate-videos/
+*:Zone.Identifier
+__pycache__/
