@@ -165,7 +165,8 @@ def process(node, cfg):
         status = fields.get("STATUS", "").split(" ")[0]
         if status == "gap":
             post_handoff(node, text)
-            add_gaps(node, fields.get("GAPS", ""))
+            if not add_gaps(node, fields.get("GAPS", "")):
+                return escalate(node, "STATUS: gap without a valid gap issue id")
             set_status(node, "status:todo")
             return print(f"{node.id}: parked behind {fields.get('GAPS')}")
         if status == "needs_human":

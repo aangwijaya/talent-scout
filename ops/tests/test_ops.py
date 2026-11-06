@@ -249,7 +249,8 @@ class Learning(unittest.TestCase):
         triage_src = (OPS / "triage").read_text().replace("\nmain()\n", "\n")
         scope = {"__file__": str(OPS / "triage")}
         exec(compile(triage_src, "triage", "exec"), scope)
-        text = ("### 2026 A\n- **Follow-up:** pending PR\n- **Repeated?:** same root cause\n"
+        text = ("## Entry template\n### YYYY\n- **Repeated?:** first time | same as entry\n## Entries\n"
+                "### 2026 A\n- **Follow-up:** pending PR\n- **Repeated?:** same root cause\n"
                 "### 2026 B\n- **Follow-up:** skill-update PR #9\n- **Repeated?:** same as X\n"
                 "### 2026 C\n- **Follow-up:** none\n- **Repeated?:** first time\n")
         self.assertEqual(scope["repeated_lessons"](text), ["2026 A"])

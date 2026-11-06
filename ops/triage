@@ -14,7 +14,8 @@ from lib import REPOS, ROOT, analyze, gh, last_handoff, load_nodes, parse_handof
 def repeated_lessons(text):
     """Return lesson titles marked as repeats whose follow-up names no PR."""
     found = []
-    for entry in re.split(r"^### ", text, flags=re.M)[1:]:
+    entries = text.split("## Entries", 1)[-1]
+    for entry in re.split(r"^### ", entries, flags=re.M)[1:]:
         repeated = re.search(r"\*\*Repeated\?:\*\*\s*(.*)", entry)
         follow_up = re.search(r"\*\*Follow-up:\*\*\s*(.*)", entry)
         if repeated and "same" in repeated.group(1).lower():
