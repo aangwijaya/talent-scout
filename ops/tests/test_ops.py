@@ -419,7 +419,10 @@ class Reconcile(unittest.TestCase):
             run.ROOT, run.gh = root, lambda *a: calls.append(a) or ""
             nodes = {n.id: n for n in (node(9001, "server", closed=True, labels=["status:review", "needs:human", "type:gap"]),
                                        node(9002, "server", closed=True))}
-            run.reconcile(nodes)
+            run.reconcile(nodes, "client")
+            self.assertEqual(calls, [], "a client runner must not touch server items")
+            self.assertTrue((root / "wt" / "server-9001").exists())
+            run.reconcile(nodes, "server")
             self.assertFalse((root / "wt" / "server-9001").exists())
             self.assertTrue((root / "wt" / "server-9002").exists(), "unmerged work must stay")
             self.assertEqual(calls, [("issue", "edit", "9001", "-R", lib.REPOS["server"],

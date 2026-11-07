@@ -268,8 +268,10 @@ def process(node, cfg):
         save_state(node.id, state)
 
 
-def reconcile(nodes):
-    """Tidy up after merges: drop status labels from closed issues, remove merged worktrees."""
+def reconcile(nodes, repo=None):
+    """Tidy up after merges: drop status labels from closed issues, remove merged worktrees.
+    With a repo, touch only that repo, so parallel runners never race on the same item."""
+    nodes = {k: n for k, n in nodes.items() if not repo or n.repo == repo}
     for node in nodes.values():
         stale = [l for l in node.labels if l.startswith("status:") or l == "needs:human"]
         if node.closed and stale:
@@ -302,13 +304,14 @@ def main():
     repo = argv[argv.index("--repo") + 1] if "--repo" in argv else None
     cfg = config()
     if "--reconcile" in argv:
-        return reconcile(load_nodes(ttl=0))
+        return reconcile(load_nodes(ttl=0), repo)
     while not STOP_FILE.exists():
-        if sh([str(OPS / "contract-sync"), "--check"], check=False).returncode:
+        # Only the client runner owns the contract pin; exit 1 is drift, other codes are errors.
+        if repo != "server" and sh([str(OPS / "contract-sync"), "--check"], check=False).returncode == 1:
             confirm("The server contract moved. Open the client sync PR")
             sh([str(OPS / "contract-sync")])
         nodes = load_nodes(ttl=0)
-        reconcile(nodes)
+        reconcile(nodes, repo)
         graph = analyze(nodes)
         ready = [k for k in graph["ready"] if nodes[k].agent in ("claude", "opencode")]
         ready = [k for k in ready if (k == only if only else (not repo or nodes[k].repo == repo))]

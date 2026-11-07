@@ -1,6 +1,7 @@
 """Shared helpers for the Talent Scout control plane. Python stdlib + the gh CLI."""
 import fnmatch
 import json
+import os
 import re
 import subprocess
 import time
@@ -103,8 +104,11 @@ def load_nodes(ttl=60):
     for repo, full in REPOS.items():
         path = CACHE / f"{repo}.json"
         if not path.exists() or time.time() - path.stat().st_mtime > ttl:
-            path.write_text(gh("issue", "list", "-R", full, "--state", "all", "--limit", "200",
-                               "--json", "number,title,body,state,labels,comments"))
+            # Write then rename, so a runner for the other repo never reads half a file.
+            fresh = path.with_suffix(f".{os.getpid()}.tmp")
+            fresh.write_text(gh("issue", "list", "-R", full, "--state", "all", "--limit", "200",
+                                "--json", "number,title,body,state,labels,comments"))
+            fresh.replace(path)
         for raw in json.loads(path.read_text()):
             node = to_node(repo, raw)
             nodes[node.id] = node

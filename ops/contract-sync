@@ -49,4 +49,8 @@ def main():
     return 0
 
 
-sys.exit(main())
+try:
+    sys.exit(main())
+except Exception as error:  # exit 1 means drift; anything else must not look like drift
+    print(f"contract-sync failed: {error}", file=sys.stderr)
+    sys.exit(2)
