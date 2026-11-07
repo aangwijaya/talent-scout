@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OPS = ROOT / "ops"
 CACHE = OPS / ".cache"
 STATE = OPS / ".state"
+HANDOFF_DIR = STATE / "handoff"
 STOP_FILE = OPS / "STOP"
 REPOS = {"client": "aangwijaya/talent-scout-client", "server": "aangwijaya/talent-scout-server"}
 AGENTS = {"client": "claude", "server": "opencode"}
@@ -176,6 +177,12 @@ def last_handoff(node):
 def state_path(node_id):
     STATE.mkdir(parents=True, exist_ok=True)
     return STATE / (node_id.replace("#", "-") + ".json")
+
+
+def handoff_path(node_id):
+    """The one file outside the worktree an agent may write."""
+    HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
+    return HANDOFF_DIR / (node_id.replace("#", "-") + ".md")
 
 
 def load_state(node_id):

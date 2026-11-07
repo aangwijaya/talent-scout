@@ -1,6 +1,7 @@
 """Run with: python3 -m unittest discover -s ops/tests"""
 import importlib.machinery
 import importlib.util
+import json
 import os
 import stat
 import subprocess
@@ -267,12 +268,12 @@ class KillSwitch(unittest.TestCase):
             old_path, old_stop = os.environ["PATH"], run.STOP_FILE
             os.environ["PATH"] = f"{tmp}:{old_path}"
             run.STOP_FILE = stop_file
-            lib.STATE.mkdir(parents=True, exist_ok=True)
+            run.STATE = Path(tmp)
             threading.Timer(1, stop_file.touch).start()
             started = time.time()
             try:
                 with self.assertRaises(run.Stop):
-                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "budget_usd": 1})
+                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "budget_usd": 1, "opencode_model": "fake/model"})
             finally:
                 os.environ["PATH"], run.STOP_FILE = old_path, old_stop
             self.assertLess(time.time() - started, 15)
@@ -288,10 +289,11 @@ class KillSwitch(unittest.TestCase):
             old_path, old_stop = os.environ["PATH"], run.STOP_FILE
             os.environ["PATH"] = f"{tmp}:{old_path}"
             run.STOP_FILE = Path(tmp, "STOP")
+            run.STATE = Path(tmp)
             threading.Timer(1, run.STOP_FILE.touch).start()
             try:
                 with self.assertRaises(run.Stop):
-                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "budget_usd": 1})
+                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "budget_usd": 1, "opencode_model": "fake/model"})
             finally:
                 os.environ["PATH"], run.STOP_FILE = old_path, old_stop
             time.sleep(5)
@@ -305,11 +307,104 @@ class KillSwitch(unittest.TestCase):
             fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
             old_path = os.environ["PATH"]
             os.environ["PATH"] = f"{tmp}:{old_path}"
+            run.STATE = Path(tmp)
             try:
-                code, text = run.run_agent("opencode", "p", tmp, {"timeout_min": 1, "budget_usd": 1})
+                code, text = run.run_agent("opencode", "p", tmp, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "fake/model"})
             finally:
                 os.environ["PATH"] = old_path
             self.assertEqual((code, len(text)), (0, 300000))
+
+    def test_opencode_runs_in_the_worktree_and_may_read_the_go_module_cache(self):
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt:
+            fake = Path(tmp, "opencode")
+            fake.write_text('#!/bin/sh\necho "PWD=$PWD"\necho "ARGS=$*"\necho "CFG=$OPENCODE_CONFIG_CONTENT"\n')
+            fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+            old_path = os.environ["PATH"]
+            os.environ["PATH"] = f"{tmp}:{old_path}"
+            run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+            try:
+                _, text = run.run_agent("opencode", "p", wt, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "fake/model"})
+            finally:
+                os.environ["PATH"] = old_path
+            self.assertIn(f"PWD={wt}\n", text)
+            self.assertIn(f"--dir {wt}", text)
+            self.assertIn("--format json", text)
+            cfg = json.loads(text.split("CFG=", 1)[1])
+            allowed = cfg["permission"]["external_directory"]
+            self.assertEqual(set(allowed.values()), {"allow"})
+            self.assertIn(f"{tmp}/handoff/*", allowed)
+            self.assertNotIn(f"{tmp}/*", allowed)
+            self.assertTrue(any(k.endswith("/pkg/mod/**") or k.endswith("/mod/**") for k in allowed))
+
+    def fake_opencode(self, tmp, script):
+        fake = Path(tmp, "opencode")
+        fake.write_text("#!/bin/sh\n" + script)
+        fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+        return load_script("run")
+
+    def test_opencode_events_give_the_reply_text_and_a_readable_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events = [{"type": "step_start", "part": {}},
+                      {"type": "tool_use", "part": {"tool": "bash", "state": {"title": "go test ./...", "status": "completed"}}},
+                      {"type": "text", "part": {"text": "done"}},
+                      {"type": "step_finish", "part": {"cost": 0.01}}]
+            lines = "".join(f"echo '{json.dumps(e)}'\n" for e in events)
+            run = self.fake_opencode(tmp, lines)
+            run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+            old_path = os.environ["PATH"]
+            os.environ["PATH"] = f"{tmp}:{old_path}"
+            try:
+                code, text = run.run_agent("opencode", "p", tmp, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
+            finally:
+                os.environ["PATH"] = old_path
+            self.assertEqual((code, text), (0, "done"))
+            self.assertIn("→ bash go test ./... [completed]", Path(tmp, Path(tmp).name + ".log").read_text())
+
+    def test_opencode_is_stopped_when_it_spends_the_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            spend = json.dumps({"type": "step_finish", "part": {"cost": 2.5}})
+            run = self.fake_opencode(tmp, f"echo '{spend}'\necho '{spend}'\nsleep 60\n")
+            run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+            old_path = os.environ["PATH"]
+            os.environ["PATH"] = f"{tmp}:{old_path}"
+            started = time.time()
+            try:
+                with self.assertRaisesRegex(run.Stop, "cost budget"):
+                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "budget_usd": 3, "opencode_model": "m"})
+            finally:
+                os.environ["PATH"] = old_path
+            self.assertLess(time.time() - started, 15)
+
+
+class Reconcile(unittest.TestCase):
+    def git(self, *args, cwd):
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=cwd, check=True,
+                       capture_output=True)
+
+    def test_merged_worktrees_go_and_closed_issues_lose_status_labels(self):
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.git("init", "-q", "--bare", "-b", "main", str(root / "origin.git"), cwd=tmp)
+            checkout = root / "talent-scout-server"
+            self.git("clone", "-q", str(root / "origin.git"), str(checkout), cwd=tmp)
+            self.git("commit", "-q", "--allow-empty", "-m", "base", cwd=checkout)
+            self.git("push", "-q", "origin", "HEAD:main", cwd=checkout)
+            for n in (9001, 9002):
+                self.git("worktree", "add", "-q", "-b", f"node/{n}", str(root / "wt" / f"server-{n}"), "origin/main",
+                         cwd=checkout)
+                self.git("commit", "-q", "--allow-empty", "-m", f"work {n}", cwd=root / "wt" / f"server-{n}")
+            self.git("push", "-q", "origin", "node/9001:main", cwd=checkout)
+            calls = []
+            run.ROOT, run.gh = root, lambda *a: calls.append(a) or ""
+            nodes = {n.id: n for n in (node(9001, "server", closed=True, labels=["status:review", "needs:human", "type:gap"]),
+                                       node(9002, "server", closed=True))}
+            run.reconcile(nodes)
+            self.assertFalse((root / "wt" / "server-9001").exists())
+            self.assertTrue((root / "wt" / "server-9002").exists(), "unmerged work must stay")
+            self.assertEqual(calls, [("issue", "edit", "9001", "-R", lib.REPOS["server"],
+                                      "--remove-label", "status:review", "--remove-label", "needs:human")])
 
 
 if __name__ == "__main__":

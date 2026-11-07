@@ -3,11 +3,11 @@
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from lib import OPS, REPOS, STATE, config, last_handoff, load_nodes, load_state
+from lib import OPS, REPOS, handoff_path, last_handoff, load_nodes, load_state
 
 
 def build(node, feedback=None):
-    handoff_file = STATE / (node.id.replace("#", "-") + ".handoff.md")
+    handoff_file = handoff_path(node.id)
     parts = [(OPS / "prompts/worker.md").read_text(),
              f"## This node\n{node.id} in {REPOS[node.repo]}: {node.title}\nAgent: {node.agent}\n"
              f"Handoff file: {handoff_file}\n\n{node.body}"]

@@ -10,6 +10,7 @@ ops/triage                   # everything waiting on you, in one list
 ops/run --repo client        # supervised: asks before each outward step
 ops/run --repo server --auto # unattended; run one process per repo for parallel work
 ops/run --node client#15     # one node only
+ops/run --reconcile          # after you merge: drop stale labels, remove merged worktrees
 ops/brief client#15          # the exact context a session receives
 ops/stop                     # hand work back and halt; ops/stop --clear to re-enable
 ```
@@ -38,10 +39,12 @@ An issue without a block is reported as unmapped and never runs. `day:N` labels 
 4. **HANDOFF**: write the structured file. The runner posts it to the issue.
 5. **GATE**: `ops/gate` checks the fence, contract, secrets, handoff, green commands, and red proof.
 6. **PR and CI**: only the runner pushes, opens PRs, and merges. Agents are denied these commands.
-7. **REVIEW**: for tier 2 and 3, a fresh session of the other agent sees only the issue and the diff.
-8. **MERGE or ESCALATE**, by tier.
+7. **REVIEW**: for tier 2 and 3, a fresh session of the other agent sees only the issue and the diff. Its findings are posted on the PR.
+8. **MERGE or ESCALATE**, by tier. When a PR waits for you, the runner prints its link.
 
 On failure the agent gets `EXPECTED / SAW / FENCE / DEAD ENDS` and retries. If the same `SAW` returns twice, or the attempt budget is spent, the node goes to `needs:human`.
+
+Each agent call is limited by `timeout_min` and, for OpenCode, by `budget_usd` summed from its cost events. Claude enforces `budget_usd` itself. Outside the worktree, agents may only write `ops/.state/handoff/` with their edit tools and read the Go module cache. Shell commands are not fenced this way.
 
 ## Tiers: gate by cost of undo
 

@@ -6,6 +6,7 @@ tier1: [*.md, docs/*, *.test.ts, *.spec.ts, *.e2e.ts, *_test.go, testdata/*]
 always_allowed: [docs/LESSONS.md, pnpm-lock.yaml, go.sum, go.mod, package.json]
 # Pilot: nothing merges by itself. Open tier 1, then tier 2, after the pilot targets pass.
 automerge: []
+opencode_model: deepseek/deepseek-v4-pro
 budget_usd: 3
 timeout_min: 40
 max_attempts: 3
