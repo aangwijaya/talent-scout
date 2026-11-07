@@ -25,7 +25,7 @@ blocked_by: [client#25]
 checks: [pnpm test]
 ```
 
-- `fence`: the paths this node may change. Don't use `[` or `]` in globs, because they mean a character class. `*` also matches `/`.
+- `fence`: the paths this node may change. The test file beside a fenced file is inside too (`a.test.ts` or `a.spec.ts` for `a.ts` or `a.svelte`, `a_test.go` for `a.go`). Don't use `[` or `]` in globs, because they mean a character class. `*` also matches `/`.
 - `blocked_by`: real dependencies. Test each arrow: what would break if B started before A finished? If nothing, delete it.
 - `checks`: extra commands that prove this node. `red: false` opts out of the red check, for work with no behavior to test first.
 

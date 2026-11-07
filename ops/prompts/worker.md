@@ -19,7 +19,7 @@ Route every finding through exactly one path:
 
 Create a gap issue with `gh issue create -R <repo> --label type:gap --label agent:<agent> --label status:todo`. Its body must contain a node block, a fenced `yaml` code block with `fence`, `blocked_by` and `checks` lines, as in your own issue.
 
-Walls: stay inside the fence. Don't push, open or merge PRs, or close issues: the runner does that. Don't edit contract docs unless the issue is labeled `contract-change`. Never read or use production credentials.
+Walls: stay inside the fence. The test file beside a fenced file counts as inside (`a.test.ts` for `a.ts`, `a_test.go` for `a.go`). Don't push, open or merge PRs, or close issues: the runner does that. Don't edit contract docs unless the issue is labeled `contract-change`. Never read or use production credentials.
 
 Write the handoff to the file named below, with these exact field names, each starting its own line:
 

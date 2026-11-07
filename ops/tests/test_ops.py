@@ -100,6 +100,25 @@ class Tiers(unittest.TestCase):
         self.assertEqual(lib.tier_of(["src/routes/a.svelte", "src/a.test.ts"], self.cfg), 2)
 
 
+class Fence(unittest.TestCase):
+    cfg = {"always_allowed": []}
+    block = {"fence": ["src/hooks.server.ts", "src/lib/server/*", "internal/http/*"]}
+
+    def test_the_test_beside_a_fenced_file_is_inside(self):
+        files = ["src/hooks.server.test.ts", "src/hooks.server.spec.ts", "src/lib/server/x.test.ts",
+                 "internal/http/router_test.go"]
+        self.assertEqual(checks.check_fence(files, self.block, self.cfg), [])
+
+    def test_a_test_of_an_unfenced_file_is_still_outside(self):
+        for path in ["src/routes/other.test.ts", "src/hooks.client.test.ts", "internal/store/db_test.go",
+                     "src/hooks.server.txt"]:
+            self.assertTrue(checks.check_fence([path], self.block, self.cfg), path)
+
+    def test_svelte_component_tests_map_to_the_component(self):
+        self.assertEqual(checks.tested_sources("src/a/Card.svelte.test.ts")[:2], ["src/a/Card.svelte.ts", "src/a/Card.svelte"])
+        self.assertIn("src/a/Card.svelte", checks.tested_sources("src/a/Card.test.ts"))
+
+
 class Gate(unittest.TestCase):
     """Each sabotage must be rejected; the clean change must pass."""
 

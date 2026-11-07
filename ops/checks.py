@@ -21,9 +21,19 @@ def changed_files(wt, base):
     return [line for line in out.splitlines() if line]
 
 
+def tested_sources(path):
+    """The source files a test file sits beside: a.test.ts -> a.ts, a.svelte; a_test.go -> a.go."""
+    go = re.fullmatch(r"(.*)_test\.go", path)
+    if go:
+        return [go.group(1) + ".go"]
+    ts = re.fullmatch(r"(.*)\.(?:test|spec)(\.[a-z]+)", path)
+    return [ts.group(1) + ts.group(2), ts.group(1), ts.group(1) + ".svelte"] if ts else []
+
+
 def check_fence(files, block, cfg):
     fence = block.get("fence", [])
-    outside = [f for f in files if not matches(f, fence) and not matches(f, cfg["always_allowed"])]
+    outside = [f for f in files if not matches(f, fence) and not matches(f, cfg["always_allowed"])
+               and not any(matches(src, fence) for src in tested_sources(f))]
     return [fail("fence", f"changes only inside {fence}", f"outside: {outside}")] if outside else []
 
 
