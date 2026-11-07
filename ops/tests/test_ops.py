@@ -263,6 +263,12 @@ class Handoff(unittest.TestCase):
         for part in ("finish the retry test", "SAW: boom", "client#7", "Handoff file:", "SCOPE"):
             self.assertIn(part, brief)
 
+    def test_findings_commented_on_the_issue_reach_the_brief(self):
+        n = node(21, labels=["agent:opencode"], comments=["prune buckets in Allow", f"{lib.HANDOFF_MARK}\nNEXT: handoff-only-once"])
+        brief = load_script("brief").build(n)
+        self.assertIn("prune buckets in Allow", brief)
+        self.assertEqual(brief.count("handoff-only-once"), 1)
+
 
 class Learning(unittest.TestCase):
     def test_repeated_lesson_without_a_follow_up_pr_is_found(self):

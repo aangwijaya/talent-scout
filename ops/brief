@@ -3,7 +3,7 @@
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from lib import OPS, REPOS, handoff_path, last_handoff, load_nodes, load_state
+from lib import HANDOFF_MARK, OPS, REPOS, handoff_path, last_handoff, load_nodes, load_state
 
 
 def build(node, feedback=None):
@@ -11,6 +11,10 @@ def build(node, feedback=None):
     parts = [(OPS / "prompts/worker.md").read_text(),
              f"## This node\n{node.id} in {REPOS[node.repo]}: {node.title}\nAgent: {node.agent}\n"
              f"Handoff file: {handoff_file}\n\n{node.body}"]
+    notes = [c for c in node.comments if not c.startswith(HANDOFF_MARK)]
+    if notes:  # findings other nodes left here, per the Findings table in WORKFLOW.md
+        parts.append("## Comments on this issue\nFindings left by other nodes. Fix the ones inside your fence.\n\n"
+                     + "\n\n---\n\n".join(notes))
     previous = last_handoff(node)
     if previous:
         parts.append("## Handoff from the previous session\n" + previous)
