@@ -44,7 +44,7 @@ An issue without a block is reported as unmapped and never runs. `day:N` labels 
 
 On failure the agent gets `EXPECTED / SAW / FENCE / DEAD ENDS` and retries. If the same `SAW` returns twice, or the attempt budget is spent, the node goes to `needs:human`.
 
-Models are pinned in `ops/tiers.yaml`: `claude_model` and `claude_effort` for Claude, `opencode_model` for OpenCode (`opencode models --verbose` lists the ids). They apply to both the worker and the reviewer role. Each agent call is limited by `timeout_min` and, for OpenCode, by `budget_usd` summed from its cost events. Claude enforces `budget_usd` itself. Outside the worktree, agents may only write `ops/.state/handoff/` with their edit tools and read the Go module cache. Shell commands are not fenced this way.
+Models are pinned in `ops/tiers.yaml`: `claude_model` and `claude_effort` for Claude, `opencode_model` and `opencode_effort` (sent as `--variant`) for OpenCode (`opencode models --verbose` lists the ids). They apply to both the worker and the reviewer role. Each agent call is limited by `timeout_min` and, for OpenCode, by `budget_usd` summed from its cost events. Claude enforces `budget_usd` itself. Outside the worktree, agents may only write `ops/.state/handoff/` with their edit tools and read the Go module cache. Shell commands are not fenced this way.
 
 ## Tiers: gate by cost of undo
 

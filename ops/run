@@ -89,6 +89,8 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
             cmd += ["--permission-mode", "acceptEdits"]
     else:
         cmd = ["opencode", "run", prompt, "--model", cfg["opencode_model"], "--dir", str(wt), "--format", "json"]
+        if cfg.get("opencode_effort"):  # OpenCode calls reasoning effort a model variant
+            cmd += ["--variant", cfg["opencode_effort"]]
         if read_only:
             cmd += ["--agent", "plan"]
     # Outside the worktree, agents may read the Go module cache and write their handoff file.

@@ -349,11 +349,12 @@ class KillSwitch(unittest.TestCase):
             os.environ["PATH"] = f"{tmp}:{old_path}"
             run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
             try:
-                _, text = run.run_agent("opencode", "p", wt, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "fake/model"})
+                _, text = run.run_agent("opencode", "p", wt, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "fake/model", "opencode_effort": "high"})
             finally:
                 os.environ["PATH"] = old_path
             self.assertIn(f"PWD={wt}\n", text)
             self.assertIn(f"--dir {wt}", text)
+            self.assertIn("--variant high", text)
             self.assertIn("--format json", text)
             cfg = json.loads(text.split("CFG=", 1)[1])
             allowed = cfg["permission"]["external_directory"]
@@ -384,9 +385,11 @@ class KillSwitch(unittest.TestCase):
 
     def test_tiers_pin_a_model_for_each_agent(self):
         cfg = lib.config()
-        for key in ("claude_model", "claude_effort", "opencode_model"):
+        for key in ("claude_model", "claude_effort", "opencode_model", "opencode_effort"):
             self.assertTrue(cfg.get(key), key)
         self.assertIn(cfg["claude_effort"], ("low", "medium", "high", "xhigh", "max"))
+        self.assertIn(cfg["opencode_effort"], ("minimal", "low", "medium", "high", "max"))
+        self.assertNotIn(" ", cfg["opencode_model"] + cfg["claude_model"])
 
     def fake_opencode(self, tmp, script):
         fake = Path(tmp, "opencode")
