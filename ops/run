@@ -82,7 +82,8 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     if agent == "claude":
         claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
         tools = ["Read", "Glob", "Grep"] if read_only else CLAUDE_TOOLS
-        cmd = [claude, "-p", prompt, "--max-budget-usd", str(cfg["budget_usd"]), "--no-session-persistence",
+        cmd = [claude, "-p", prompt, "--model", cfg["claude_model"], "--effort", cfg["claude_effort"],
+               "--max-budget-usd", str(cfg["budget_usd"]), "--no-session-persistence",
                "--add-dir", str(HANDOFF_DIR), go_mod_cache(), "--allowedTools", *tools]
         if not read_only:
             cmd += ["--permission-mode", "acceptEdits"]

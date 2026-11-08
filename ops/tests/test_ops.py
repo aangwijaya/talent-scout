@@ -362,6 +362,32 @@ class KillSwitch(unittest.TestCase):
             self.assertNotIn(f"{tmp}/*", allowed)
             self.assertTrue(any(k.endswith("/pkg/mod/**") or k.endswith("/mod/**") for k in allowed))
 
+    def test_claude_uses_the_pinned_model_as_worker_and_reviewer(self):
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt:
+            fake = Path(tmp, "claude")
+            fake.write_text('#!/bin/sh\necho "ARGS=$*"\n')
+            fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+            old_path = os.environ["PATH"]
+            os.environ["PATH"] = f"{tmp}:{old_path}"
+            run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+            cfg = {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m",
+                   "claude_model": "claude-test-model", "claude_effort": "low"}
+            try:
+                _, worker = run.run_agent("claude", "p", wt, cfg)
+                _, reviewer = run.run_agent("claude", "p", wt, cfg, read_only=True)
+            finally:
+                os.environ["PATH"] = old_path
+            for args in (worker, reviewer):
+                self.assertIn("--model claude-test-model", args)
+                self.assertIn("--effort low", args)
+
+    def test_tiers_pin_a_model_for_each_agent(self):
+        cfg = lib.config()
+        for key in ("claude_model", "claude_effort", "opencode_model"):
+            self.assertTrue(cfg.get(key), key)
+        self.assertIn(cfg["claude_effort"], ("low", "medium", "high", "xhigh", "max"))
+
     def fake_opencode(self, tmp, script):
         fake = Path(tmp, "opencode")
         fake.write_text("#!/bin/sh\n" + script)

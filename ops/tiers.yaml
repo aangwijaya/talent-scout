@@ -6,7 +6,11 @@ tier1: [*.md, docs/*, *.test.ts, *.spec.ts, *.e2e.ts, *_test.go, testdata/*]
 always_allowed: [docs/LESSONS.md, pnpm-lock.yaml, go.sum, go.mod, package.json]
 # Pilot: nothing merges by itself. Open tier 1, then tier 2, after the pilot targets pass.
 automerge: []
-opencode_model: deepseek/deepseek-v4-pro
+# Models per agent. Claude works on the client and reviews the server; OpenCode does the reverse.
+claude_model: claude-opus-5-5
+claude_effort: medium
+# deepseek/deepseek-flash is "DeepSeek V4.1 Flash 1017" on the DeepSeek API (opencode models --verbose).
+opencode_model: deepseek/deepseek-flash
 budget_usd: 3
 timeout_min: 40
 max_attempts: 3
