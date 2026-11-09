@@ -197,16 +197,29 @@ def wait_ci(node, branch, cfg):
     return [{"check": "ci", "expected": "CI finishes", "saw": "timed out"}]
 
 
+def parse_findings(text):
+    """The reviewer's last {"findings": [...]} object, fenced as asked or bare (models drop the fence)."""
+    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text, re.S)
+    if blocks:
+        return json.loads(blocks[-1])["findings"]
+    decoder, found = json.JSONDecoder(), None
+    for match in re.finditer(r'\{\s*"findings"', text):
+        try:
+            found = decoder.raw_decode(text, match.start())[0]["findings"]
+        except (ValueError, KeyError):
+            continue
+    return found
+
+
 def independent_review(node, wt, cfg):
     """A fresh session of the other agent, given only the issue and the diff."""
     diff = sh(["git", "diff", "origin/main...HEAD"], cwd=wt).stdout
     prompt = f"{(OPS / 'prompts/review.md').read_text()}\n\n## Issue\n{node.body}\n\n## Diff\n{diff}"
     reviewer = "claude" if AGENTS[node.repo] == "opencode" else "opencode"
     code, text = run_agent(reviewer, prompt, wt, cfg, read_only=True)
-    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text, re.S)
-    if code or not blocks:
+    findings = None if code else parse_findings(text)
+    if findings is None:
         return None
-    findings = json.loads(blocks[-1])["findings"]
     lines = [f"- **{f.get('severity')}** `{f.get('file')}`: {f.get('summary')}" for f in findings]
     branch = sh(["git", "branch", "--show-current"], cwd=wt).stdout.strip()
     gh("pr", "comment", branch, "-R", REPOS[node.repo],

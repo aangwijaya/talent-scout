@@ -406,6 +406,20 @@ class KillSwitch(unittest.TestCase):
                 self.assertIn("STDIN=MARKER-END", text, agent)
                 self.assertNotIn("MARKER", text.split("STDIN=")[0], agent)
 
+    def test_review_findings_are_read_with_or_without_a_fence(self):
+        run = load_script("run")
+        finding = {"severity": "Low", "file": "a.go", "summary": "x"}
+        fenced = 'notes\n```json\n{"findings": [{"severity": "High", "file": "b", "summary": "y"}]}\n```'
+        cases = {
+            fenced: "High",
+            'I traced it.\n{"findings": [' + json.dumps(finding) + "]}": "Low",
+            'first {"findings": []} then final {"findings": [' + json.dumps(finding) + "]}": "Low",
+        }
+        for text, severity in cases.items():
+            self.assertEqual(run.parse_findings(text)[0]["severity"], severity)
+        self.assertEqual(run.parse_findings('```json\n{"findings": []}\n```'), [])
+        self.assertIsNone(run.parse_findings("no verdict here"))
+
     def test_tiers_pin_a_model_for_each_agent(self):
         cfg = lib.config()
         for key in ("claude_model", "claude_effort", "opencode_model", "opencode_effort"):
