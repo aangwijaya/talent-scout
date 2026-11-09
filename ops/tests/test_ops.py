@@ -358,7 +358,9 @@ class KillSwitch(unittest.TestCase):
             self.assertIn("--format json", text)
             cfg = json.loads(text.split("CFG=", 1)[1])
             allowed = cfg["permission"]["external_directory"]
-            self.assertEqual(set(allowed.values()), {"allow"})
+            # A rejected "ask" ends an OpenCode run; "deny" lets the agent read the error and carry on.
+            self.assertEqual(list(allowed.items())[0], ("*", "deny"))
+            self.assertEqual({v for k, v in allowed.items() if k != "*"}, {"allow"})
             self.assertIn(f"{tmp}/handoff/*", allowed)
             self.assertNotIn(f"{tmp}/*", allowed)
             self.assertTrue(any(k.endswith("/pkg/mod/**") or k.endswith("/mod/**") for k in allowed))

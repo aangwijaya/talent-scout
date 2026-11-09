@@ -95,7 +95,9 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
             cmd += ["--agent", "plan"]
     # Outside the worktree, agents may read the Go module cache and write their handoff file.
     # OpenCode takes its project directory from PWD, not from the process cwd.
-    outside = {f"{go_mod_cache()}/**": "allow", f"{HANDOFF_DIR}/*": "allow"}
+    # Everything else outside is "deny", not the default "ask": a rejected ask ends the whole OpenCode
+    # run without a handoff, while a deny returns an error the agent can read and work around.
+    outside = {"*": "deny", f"{go_mod_cache()}/**": "allow", f"{HANDOFF_DIR}/*": "allow"}
     env = dict(os.environ, PWD=str(wt),
                OPENCODE_CONFIG_CONTENT=json.dumps({"permission": {"external_directory": outside}}))
     log_path = STATE / f"{Path(wt).name}.log"
