@@ -82,13 +82,13 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     if agent == "claude":
         claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
         tools = ["Read", "Glob", "Grep"] if read_only else CLAUDE_TOOLS
-        cmd = [claude, "-p", prompt, "--model", cfg["claude_model"], "--effort", cfg["claude_effort"],
+        cmd = [claude, "-p", "--model", cfg["claude_model"], "--effort", cfg["claude_effort"],
                "--max-budget-usd", str(cfg["budget_usd"]), "--no-session-persistence",
                "--add-dir", str(HANDOFF_DIR), go_mod_cache(), "--allowedTools", *tools]
         if not read_only:
             cmd += ["--permission-mode", "acceptEdits"]
     else:
-        cmd = ["opencode", "run", prompt, "--model", cfg["opencode_model"], "--dir", str(wt), "--format", "json"]
+        cmd = ["opencode", "run", "--model", cfg["opencode_model"], "--dir", str(wt), "--format", "json"]
         if cfg.get("opencode_effort"):  # OpenCode calls reasoning effort a model variant
             cmd += ["--variant", cfg["opencode_effort"]]
         if read_only:
@@ -104,8 +104,12 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     seen, partial = {"cost": 0.0, "text": []}, ""
     with tempfile.TemporaryDirectory() as tmp, open(log_path, "a") as log:
         out = Path(tmp, "out")
-        with open(out, "w") as sink, open(out) as source:
-            child = subprocess.Popen(cmd, cwd=wt, env=env, stdout=sink, stderr=log, text=True,
+        # The prompt goes through stdin: one argv string is capped at 128 KiB, and a review prompt
+        # carries the whole diff.
+        brief = Path(tmp, "prompt")
+        brief.write_text(prompt)
+        with open(out, "w") as sink, open(out) as source, open(brief) as stdin:
+            child = subprocess.Popen(cmd, cwd=wt, env=env, stdin=stdin, stdout=sink, stderr=log, text=True,
                                      start_new_session=True)
             started = time.time()
             deadline = started + cfg["timeout_min"] * 60

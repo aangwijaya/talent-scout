@@ -385,6 +385,27 @@ class KillSwitch(unittest.TestCase):
                 self.assertIn("--model claude-test-model", args)
                 self.assertIn("--effort low", args)
 
+    def test_a_prompt_larger_than_the_argument_limit_goes_through_stdin(self):
+        run = load_script("run")
+        prompt = "MARKER-START\n" + "x" * 200_000 + "\nMARKER-END"  # one argv string is capped at 128 KiB
+        for agent in ("claude", "opencode"):
+            with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt:
+                fake = Path(tmp, agent)
+                fake.write_text('#!/bin/sh\necho "ARGC=$#"\nprintf "STDIN="; tail -c 10\necho\n')
+                fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+                old_path = os.environ["PATH"]
+                os.environ["PATH"] = f"{tmp}:{old_path}"
+                run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+                cfg = {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m",
+                       "claude_model": "c", "claude_effort": "low"}
+                try:
+                    code, text = run.run_agent(agent, prompt, wt, cfg, read_only=True)
+                finally:
+                    os.environ["PATH"] = old_path
+                self.assertEqual(code, 0, agent)
+                self.assertIn("STDIN=MARKER-END", text, agent)
+                self.assertNotIn("MARKER", text.split("STDIN=")[0], agent)
+
     def test_tiers_pin_a_model_for_each_agent(self):
         cfg = lib.config()
         for key in ("claude_model", "claude_effort", "opencode_model", "opencode_effort"):
