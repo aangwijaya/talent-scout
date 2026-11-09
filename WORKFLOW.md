@@ -84,6 +84,10 @@ The server repo is the source. `contract.lock` in the client pins a server commi
 
 `ops/triage --apply` opens a `skill-update` node for lessons marked as repeats with no follow-up PR. Prefer a check or lint rule over more text.
 
+## Planning a feature or revamp
+
+Interactive skills live in this repo, not in the app repos: `grilling` (a round-by-round interview until every design decision is settled), `domain-modeling` (`GLOSSARY.md` and ADRs) and `grill-with-docs` (both). They ask a human questions, so a headless agent must never load them. The settled plan becomes nodes: issues with `fence`, `blocked_by` and `checks`.
+
 ## Pilot targets before enabling tier 2 auto-merge
 
 - Under 1 human intervention per tier 1–2 issue on average
