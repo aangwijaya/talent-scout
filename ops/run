@@ -329,7 +329,7 @@ def main():
         return reconcile(load_nodes(ttl=0), repo)
     while not STOP_FILE.exists():
         # Only the client runner owns the contract pin; exit 1 is drift, other codes are errors.
-        if repo != "server" and sh([str(OPS / "contract-sync"), "--check"], check=False).returncode == 1:
+        if (repo or (only or "").split("#")[0]) != "server" and sh([str(OPS / "contract-sync"), "--check"], check=False).returncode == 1:
             confirm("The server contract moved. Open the client sync PR")
             sh([str(OPS / "contract-sync")])
         nodes = load_nodes(ttl=0)

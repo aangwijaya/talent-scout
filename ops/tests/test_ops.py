@@ -468,6 +468,38 @@ class KillSwitch(unittest.TestCase):
             self.assertLess(time.time() - started, 15)
 
 
+class ContractSync(unittest.TestCase):
+    def run_sync(self, open_pr, *args):
+        sync = load_script("contract-sync")
+        calls = []
+
+        def fake_sh(cmd, cwd=None, check=True):
+            calls.append(cmd)
+            out = "abcdef1234567890\n" if cmd[:2] == ["git", "rev-parse"] else ""
+            if cmd[:2] == ["git", "show"] and cmd[2].endswith("contract.lock"):
+                out = json.dumps({"files": {}})
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+
+        sync.sh = fake_sh
+        sync.gh = lambda *a: open_pr if a[:2] == ("pr", "list") else ""
+        old = sys.argv
+        sys.argv = ["contract-sync", *args]
+        try:
+            return sync.main(), calls
+        finally:
+            sys.argv = old
+
+    def test_an_open_sync_pr_is_not_drift_and_is_not_opened_twice(self):
+        for args in ((), ("--check",)):
+            code, calls = self.run_sync("https://github.com/o/c/pull/34\n", *args)
+            self.assertEqual(code, 0)
+            self.assertFalse(any("worktree" in c for c in calls))
+
+    def test_drift_without_a_sync_pr_is_reported(self):
+        code, _ = self.run_sync("", "--check")
+        self.assertEqual(code, 1)
+
+
 class Reconcile(unittest.TestCase):
     def git(self, *args, cwd):
         subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=cwd, check=True,

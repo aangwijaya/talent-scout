@@ -31,10 +31,16 @@ def main():
     locked = json.loads(current.stdout)["files"] if current.returncode == 0 else {}
     if locked == hashes:
         return 0
+    branch = f"contract/{head[:8]}"
+    # An open sync PR already carries this pin; it is waiting for the human merge, not drift to act on again.
+    pending = gh("pr", "list", "-R", REPOS["client"], "--head", branch, "--state", "open",
+                 "--json", "url", "-q", ".[0].url").strip()
+    if pending:
+        print(f"sync PR for {head[:8]} is waiting for merge: {pending}", file=sys.stderr)
+        return 0
     if "--check" in sys.argv:
         return 1
     wt = ROOT / "wt" / f"client-contract-{head[:8]}"
-    branch = f"contract/{head[:8]}"
     sh(["git", "worktree", "add", "-q", str(wt), "-b", branch, "--no-track", "origin/main"], cwd=CLIENT)
     for path, text in contents.items():
         (wt / FILES[path]).write_text(text)
@@ -49,8 +55,9 @@ def main():
     return 0
 
 
-try:
-    sys.exit(main())
-except Exception as error:  # exit 1 means drift; anything else must not look like drift
-    print(f"contract-sync failed: {error}", file=sys.stderr)
-    sys.exit(2)
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as error:  # exit 1 means drift; anything else must not look like drift
+        print(f"contract-sync failed: {error}", file=sys.stderr)
+        sys.exit(2)
