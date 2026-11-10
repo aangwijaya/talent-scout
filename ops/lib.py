@@ -151,7 +151,8 @@ def analyze(nodes):
 
 
 def matches(path, globs):
-    return any(fnmatch.fnmatch(path, glob) for glob in globs)
+    """`*` and `?` are wildcards; `[` is literal, because SvelteKit route params live in brackets."""
+    return any(fnmatch.fnmatch(path, glob.replace("[", "[[]")) for glob in globs)
 
 
 def tier_of(files, cfg):

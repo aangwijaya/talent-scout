@@ -114,6 +114,15 @@ class Fence(unittest.TestCase):
                      "src/hooks.server.txt"]:
             self.assertTrue(checks.check_fence([path], self.block, self.cfg), path)
 
+    def test_route_params_in_brackets_are_literal(self):
+        # SvelteKit routes put params in brackets; fnmatch would read [jobId] as a character class.
+        block = {"fence": ["src/routes/jobs/[jobId]/+page.svelte", "src/routes/runs/[runId]/*"]}
+        inside = ["src/routes/jobs/[jobId]/+page.svelte", "src/routes/runs/[runId]/+page.server.ts",
+                  "src/routes/runs/[runId]/page.server.test.ts"]
+        self.assertEqual(checks.check_fence(inside, block, self.cfg), [])
+        for path in ["src/routes/jobs/j/+page.svelte", "src/routes/runs/r/+page.svelte"]:
+            self.assertTrue(checks.check_fence([path], block, self.cfg), path)
+
     def test_svelte_component_tests_map_to_the_component(self):
         self.assertEqual(checks.tested_sources("src/a/Card.svelte.test.ts")[:2], ["src/a/Card.svelte.ts", "src/a/Card.svelte"])
         self.assertIn("src/a/Card.svelte", checks.tested_sources("src/a/Card.test.ts"))
