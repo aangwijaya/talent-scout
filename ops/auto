@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Run one node unattended in a detached tmux session, so the run survives a closed terminal.
+# Usage: ops/auto client#37
+# It tidies the repo first (reconcile), then runs the node with --once --auto.
+# Merging stays yours while `automerge: []` is empty in ops/tiers.yaml.
+set -euo pipefail
+
+node="${1:-}"
+if [[ ! "$node" =~ ^(client|server)#[0-9]+$ ]]; then
+  echo "usage: ops/auto client#37   (or server#12)" >&2
+  exit 2
+fi
+if ! command -v tmux >/dev/null; then
+  echo "tmux is not installed: sudo apt install tmux" >&2
+  exit 2
+fi
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+repo="${node%%#*}"
+session="ts-${repo}-${node#*#}"
+log="$root/ops/.state/auto-${repo}-${node#*#}.log"
+# Exists only while the run itself is going; a finished session just waits for Enter.
+busy="$root/ops/.state/auto-${repo}-${node#*#}.running"
+mkdir -p "$root/ops/.state"
+
+if tmux has-session -t "$session" 2>/dev/null; then
+  if [[ -e "$busy" ]]; then
+    echo "$node is already running. Watch it: tmux attach -t $session" >&2
+    exit 1
+  fi
+  echo "closing the finished session $session from the previous run"
+  tmux kill-session -t "$session"
+fi
+
+touch "$busy"
+tmux new-session -d -s "$session" -c "$root" \
+  "{ echo \"== \$(date '+%F %T') $node\"; ops/run --reconcile --repo $repo && ops/run --node '$node' --once --auto; echo \"== exit \$? at \$(date '+%F %T')\"; } 2>&1 | tee -a '$log'; rm -f '$busy'; echo; echo 'Done. Press Enter to close.'; read"
+
+echo "$node is running unattended in tmux session $session"
+echo "  watch:   tmux attach -t $session   (leave again with Ctrl-b d)"
+echo "  log:     tail -f $log"
+echo "  stop:    ops/stop"

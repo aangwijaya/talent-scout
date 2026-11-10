@@ -10,6 +10,7 @@ ops/triage                   # everything waiting on you, in one list
 ops/run --repo client        # supervised: asks before each outward step
 ops/run --repo server --auto # unattended; run one process per repo for parallel work
 ops/run --node client#15     # one node only
+ops/auto client#15           # reconcile, then that node with --once --auto in a detached tmux session
 ops/run --reconcile          # after you merge: drop stale labels, remove merged worktrees
 ops/brief client#15          # the exact context a session receives
 ops/stop                     # hand work back and halt; ops/stop --clear to re-enable
