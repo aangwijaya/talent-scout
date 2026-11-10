@@ -88,6 +88,16 @@ The server repo is the source. `contract.lock` in the client pins a server commi
 
 Interactive skills live in this repo, not in the app repos: `grilling` (a round-by-round interview until every design decision is settled), `domain-modeling` (`GLOSSARY.md` and ADRs) and `grill-with-docs` (both). They ask a human questions, so a headless agent must never load them. The settled plan becomes nodes: issues with `fence`, `blocked_by` and `checks`.
 
+## Mockups before a UI node
+
+Before a UI node runs, its screens are mocked up here with the human and published as an artifact. The approved mockup link goes into the node's issue as the visual reference, and `talent-scout-client/DESIGN.md` still wins on any conflict. The skills for this live in this repo:
+
+- `impeccable`: a symlink to the client's pinned copy (`talent-scout-client/.claude/skills/impeccable`), so mockups follow the same rules as the agent that builds the page. Only `critique` and `audit` are used here.
+- `prototype`: several genuinely different versions of one UI piece behind a picker. Variants use the `DESIGN.md` tokens and never touch app code.
+- `break-ui`: the same screen with realistic worst-case data, such as long names, empty tables or every criterion `needs_manual`.
+
+Like the planning skills, they need a human, so a headless agent must never load them.
+
 ## Pilot targets before enabling tier 2 auto-merge
 
 - Under 1 human intervention per tier 1–2 issue on average
