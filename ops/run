@@ -30,6 +30,7 @@ _brief = importlib.util.module_from_spec(_spec)
 _loader.exec_module(_brief)
 
 AUTO = "--auto" in sys.argv
+LAST_AGENT_ERROR = None  # the API error that ended the last agent run, if any
 CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm:*)", "Bash(go:*)", "Bash(gofmt:*)",
                 "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)", "Bash(git diff:*)",
                 "Bash(git log:*)", "Bash(git show:*)", "Bash(gh issue view:*)", "Bash(gh issue list:*)",
@@ -74,10 +75,19 @@ def read_events(lines, seen, log, events):
         elif event["type"] == "text":
             seen["text"].append(part.get("text", ""))
             log.write(part.get("text", "") + "\n")
+        elif event["type"] == "error":
+            # An API refusal (no balance, region, auth) ends the run; say so instead of failing silently.
+            error = event.get("error") or {}
+            data = error.get("data") or {}
+            status = f" {data['statusCode']}" if data.get("statusCode") else ""
+            seen["error"] = f"opencode {error.get('name', 'error')}{status}: {data.get('message') or error}"
+            log.write(f"ERROR {seen['error']}\n")
     log.flush()
 
 
 def run_agent(agent, prompt, wt, cfg, read_only=False):
+    global LAST_AGENT_ERROR
+    LAST_AGENT_ERROR = None
     HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
     if agent == "claude":
         claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
@@ -134,6 +144,7 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
                 if elapsed >= 60 and elapsed % 60 < 3:
                     cost = f", ${seen['cost']:.2f}" if agent == "opencode" else ""
                     print(f"  {agent} working, {elapsed // 60} min{cost} (tail -f {log_path})", flush=True)
+    LAST_AGENT_ERROR = seen.get("error")
     return child.returncode, "\n".join(seen["text"])
 
 
@@ -241,6 +252,9 @@ def process(node, cfg):
         handoff_file.unlink(missing_ok=True)
         run_agent(node.agent, _brief.build(node, note), wt, cfg)
         text = handoff_file.read_text() if handoff_file.exists() else ""
+        if not text and LAST_AGENT_ERROR:
+            # Retrying cannot help while the API refuses every call.
+            return escalate(node, f"the agent stopped: {LAST_AGENT_ERROR}")
         fields = parse_handoff(text)
         status = fields.get("STATUS", "").split(" ")[0]
         if status == "gap":
@@ -268,7 +282,8 @@ def process(node, cfg):
         if not failures and result["tier"] >= 2:
             findings = independent_review(node, wt, cfg)
             if findings is None:
-                return escalate(node, "independent review did not return findings")
+                reason = "independent review did not return findings"
+                return escalate(node, f"{reason}: {LAST_AGENT_ERROR}" if LAST_AGENT_ERROR else reason)
             high = [f for f in findings if f.get("severity") == "High"]
             failures = [{"check": "review", "expected": "no High findings", "saw": f"{f['file']}: {f['summary']}"} for f in high]
         if not failures:

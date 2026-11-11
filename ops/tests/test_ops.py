@@ -461,6 +461,34 @@ class KillSwitch(unittest.TestCase):
             self.assertEqual((code, text), (0, "done"))
             self.assertIn("→ bash go test ./... [completed]", Path(tmp, Path(tmp).name + ".log").read_text())
 
+    def test_an_opencode_api_error_is_logged_and_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            error = {"type": "error", "error": {"name": "APIError", "data": {"message": "Insufficient Balance", "statusCode": 402}}}
+            run = self.fake_opencode(tmp, f"echo '{json.dumps(error)}'\nexit 1\n")
+            run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+            old_path = os.environ["PATH"]
+            os.environ["PATH"] = f"{tmp}:{old_path}"
+            try:
+                code, _ = run.run_agent("opencode", "p", tmp, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
+            finally:
+                os.environ["PATH"] = old_path
+            self.assertEqual(code, 1)
+            self.assertEqual(run.LAST_AGENT_ERROR, "opencode APIError 402: Insufficient Balance")
+            self.assertIn("ERROR opencode APIError 402: Insufficient Balance", Path(tmp, Path(tmp).name + ".log").read_text())
+
+    def test_a_clean_run_clears_the_last_agent_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.fake_opencode(tmp, "echo '" + json.dumps({"type": "text", "part": {"text": "ok"}}) + "'\n")
+            run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+            run.LAST_AGENT_ERROR = "opencode APIError 402: old"
+            old_path = os.environ["PATH"]
+            os.environ["PATH"] = f"{tmp}:{old_path}"
+            try:
+                run.run_agent("opencode", "p", tmp, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
+            finally:
+                os.environ["PATH"] = old_path
+            self.assertIsNone(run.LAST_AGENT_ERROR)
+
     def test_opencode_is_stopped_when_it_spends_the_budget(self):
         with tempfile.TemporaryDirectory() as tmp:
             spend = json.dumps({"type": "step_finish", "part": {"cost": 2.5}})
