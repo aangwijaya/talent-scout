@@ -18,11 +18,20 @@ import checks
 import lib
 
 
+FIXTURE_DIR = tempfile.mkdtemp(prefix="ops-tests-")
+FAKE_AGENT_TOKEN = "github_pat_" + "x" * 40
+
+
 def load_script(name):
     loader = importlib.machinery.SourceFileLoader(name, str(OPS / name))
     spec = importlib.util.spec_from_loader(name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
+    if name == "run":
+        # Never let a test reach the real agent token; tests that need it missing set their own path.
+        token = Path(FIXTURE_DIR, "agent.gh-token")
+        token.write_text(FAKE_AGENT_TOKEN + "\n")
+        module.AGENT_GH_TOKEN = token
     return module
 
 
@@ -568,6 +577,82 @@ class Reconcile(unittest.TestCase):
             self.assertTrue((root / "wt" / "server-9002").exists(), "unmerged work must stay")
             self.assertEqual(calls, [("issue", "edit", "9001", "-R", lib.REPOS["server"],
                                       "--remove-label", "status:review", "--remove-label", "needs:human")])
+
+
+class AgentEnv(unittest.TestCase):
+    """Sandbox stage 0: agents get an allowlisted env and their own GitHub token, never the human's."""
+    SECRETS = {"DATABASE_URL": "postgres://u:p@h/db", "OPENROUTER_API_KEY": "sk-or-fake",
+               "GITHUB_TOKEN": "ghp_human", "SSH_AUTH_SOCK": "/tmp/agent.sock", "AWS_SECRET_ACCESS_KEY": "x"}
+
+    def setUp(self):
+        self.saved = dict(os.environ)
+        os.environ.update(self.SECRETS)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.saved)
+
+    def test_env_drops_everything_outside_the_allowlist(self):
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = run.agent_env(tmp, tmp)
+        for name in self.SECRETS:
+            self.assertNotIn(name, env)
+        self.assertEqual(env["PATH"], os.environ["PATH"])
+        self.assertEqual(env["PWD"], tmp)
+        allowed = set(run.AGENT_ENV_KEEP) | set(run.AGENT_ENV_SET)
+        self.assertLessEqual({k for k in env if not k.startswith("GIT_CONFIG_")}, allowed)
+
+    def test_agent_gets_its_own_token_and_no_gh_login(self):
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = run.agent_env(tmp, tmp)
+            self.assertEqual(env["GH_TOKEN"], FAKE_AGENT_TOKEN)
+            # An empty gh config dir: without GH_TOKEN, gh has no login to fall back to.
+            self.assertEqual(env["GH_CONFIG_DIR"], tmp)
+
+    def test_git_reaches_github_over_https_with_the_agent_token_only(self):
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = run.agent_env(tmp, tmp)
+            git = lambda *a: subprocess.run(["git", *a], env=env, cwd=tmp, capture_output=True, text=True).stdout
+            self.assertEqual(git("config", "--get-all", "url.https://github.com/.insteadOf").split(),
+                             ["git@github.com:", "ssh://git@github.com/"])
+            # An empty helper first clears any helper the human configured; then only gh, which reads GH_TOKEN.
+            self.assertEqual(git("config", "--get-all", "credential.helper").split("\n")[:2],
+                             ["", "!gh auth git-credential"])
+            self.assertEqual(env["GIT_TERMINAL_PROMPT"], "0")
+
+    def test_missing_token_stops_before_the_agent_starts(self):
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as tmp:
+            run.AGENT_GH_TOKEN = Path(tmp, "absent")
+            with self.assertRaises(run.Stop) as err:
+                run.agent_env(tmp, tmp)
+            self.assertIn("WORKFLOW.md", str(err.exception))
+
+    def test_a_token_that_is_not_fine_grained_is_refused(self):
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as tmp:
+            for wrong in ("ghp_classic", "gho_from_gh_login", ""):
+                run.AGENT_GH_TOKEN = Path(tmp, "token")
+                run.AGENT_GH_TOKEN.write_text(wrong)
+                with self.assertRaises(run.Stop):
+                    run.agent_env(tmp, tmp)
+
+    def test_the_agent_process_sees_only_the_agent_env(self):
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt:
+            fake = Path(tmp, "opencode")
+            fake.write_text("#!/bin/sh\nenv\n")
+            fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+            os.environ["PATH"] = f"{tmp}:{os.environ['PATH']}"
+            run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+            _, text = run.run_agent("opencode", "p", wt, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "fake/model"})
+            names = {line.split("=", 1)[0] for line in text.splitlines() if "=" in line}
+            for name in self.SECRETS:
+                self.assertNotIn(name, names)
+            self.assertIn(f"GH_TOKEN={FAKE_AGENT_TOKEN}", text.splitlines())
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 
 ops/run [--repo client|server] [--node client#15] [--once] [--auto]
 ops/run --reconcile   tidy labels and worktrees after you merge
+ops/run --check-agent-auth   prove the agent token reads issues and cannot push
 Without --auto every outward step asks first. Run one process per repo for parallel work.
 """
 import json
@@ -36,9 +37,77 @@ CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm:*)", "Bash(g
                 "Bash(git log:*)", "Bash(git show:*)", "Bash(gh issue view:*)", "Bash(gh issue list:*)",
                 "Bash(gh issue create:*)", "Bash(gh issue comment:*)", "Bash(rg:*)", "Bash(ls:*)"]
 
+# The agent's own GitHub identity: a fine-grained token with Issues read/write and Metadata read only.
+# It cannot push, open PRs or merge; ops/run does those with the human's gh. See WORKFLOW.md.
+AGENT_GH_TOKEN = OPS / "env" / "agent.gh-token"
+# Agents run code they write (go test, pnpm scripts), so every variable passed here reaches that
+# code too. Anything not listed is dropped: database URLs, API keys, the human's tokens and sockets.
+AGENT_ENV_KEEP = {
+    "PATH": "finds go, pnpm, node, git, gh and the agent CLIs",
+    "HOME": "the agent CLIs keep their own login and config under it",
+    "USER": "some tools look up the current user",
+    "LOGNAME": "same as USER",
+    "SHELL": "OpenCode's bash tool starts this shell",
+    "LANG": "text encoding",
+    "LC_ALL": "text encoding, when set",
+    "TERM": "terminal type for CLI output",
+    "TZ": "time zone, when set",
+    "TMPDIR": "temp files, when set",
+    "XDG_CONFIG_HOME": "OpenCode config, when moved out of HOME",
+    "XDG_DATA_HOME": "OpenCode login, when moved out of HOME",
+    "XDG_CACHE_HOME": "tool caches, when moved out of HOME",
+    "XDG_STATE_HOME": "tool state, when moved out of HOME",
+    "GOPATH": "Go workspace",
+    "GOMODCACHE": "Go module cache, which agents may read",
+    "GOCACHE": "Go build cache",
+    "GOROOT": "Go install, when not on the default path",
+    "GOFLAGS": "Go flags, when set",
+    "GOTOOLCHAIN": "Go toolchain choice",
+    "GOPROXY": "Go module proxy",
+    "PNPM_HOME": "pnpm install and store",
+    "COREPACK_HOME": "corepack, which provides pnpm",
+    "COREPACK_ENABLE_AUTO_PIN": "keeps corepack from editing package.json",
+    "NVM_DIR": "node from nvm, when used",
+    "CLAUDE_CONFIG_DIR": "Claude CLI login, when moved out of HOME",
+    "ANTHROPIC_API_KEY": "Claude CLI login, when it uses an API key instead of a stored login",
+    "CLAUDE_CODE_OAUTH_TOKEN": "Claude CLI login, when it uses a long-lived token",
+    "HTTP_PROXY": "egress proxy (sandbox stage 1)",
+    "HTTPS_PROXY": "egress proxy (sandbox stage 1)",
+    "NO_PROXY": "egress proxy (sandbox stage 1)",
+    "http_proxy": "egress proxy (sandbox stage 1)",
+    "https_proxy": "egress proxy (sandbox stage 1)",
+    "no_proxy": "egress proxy (sandbox stage 1)",
+}
+# Set by ops/run itself, never copied from the parent.
+AGENT_ENV_SET = {"PWD", "OPENCODE_CONFIG_CONTENT", "GH_TOKEN", "GH_CONFIG_DIR", "GH_PROMPT_DISABLED",
+                 "GIT_TERMINAL_PROMPT", "GIT_CONFIG_COUNT"}
+# Git config through the environment. The remotes use SSH and the human's key, so github.com goes
+# over HTTPS instead, where the only credential is the agent token (gh reads GH_TOKEN). The empty
+# helper first clears any helper the human configured.
+AGENT_GIT_CONFIG = [("url.https://github.com/.insteadOf", "git@github.com:"),
+                    ("url.https://github.com/.insteadOf", "ssh://git@github.com/"),
+                    ("credential.helper", ""),
+                    ("credential.helper", "!gh auth git-credential")]
+
 
 class Stop(Exception):
     pass
+
+
+def agent_env(wt, gh_config_dir):
+    """The whole environment an agent gets. gh_config_dir is an empty dir, so gh has no login to fall back to."""
+    try:
+        token = AGENT_GH_TOKEN.read_text().strip()
+    except FileNotFoundError:
+        raise Stop(f"no agent GitHub token at {AGENT_GH_TOKEN}; see 'Agent GitHub token' in WORKFLOW.md")
+    if not token.startswith("github_pat_"):
+        raise Stop(f"{AGENT_GH_TOKEN} must hold a fine-grained token (github_pat_...), not a classic or gh login token")
+    env = {k: os.environ[k] for k in AGENT_ENV_KEEP if k in os.environ}
+    env.update(PWD=str(wt), GH_TOKEN=token, GH_CONFIG_DIR=str(gh_config_dir), GH_PROMPT_DISABLED="1",
+               GIT_TERMINAL_PROMPT="0", GIT_CONFIG_COUNT=str(len(AGENT_GIT_CONFIG)))
+    for i, (key, value) in enumerate(AGENT_GIT_CONFIG):
+        env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"] = key, value
+    return env
 
 
 def confirm(step):
@@ -108,11 +177,13 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     # Everything else outside is "deny", not the default "ask": a rejected ask ends the whole OpenCode
     # run without a handoff, while a deny returns an error the agent can read and work around.
     outside = {"*": "deny", f"{go_mod_cache()}/**": "allow", f"{HANDOFF_DIR}/*": "allow"}
-    env = dict(os.environ, PWD=str(wt),
-               OPENCODE_CONFIG_CONTENT=json.dumps({"permission": {"external_directory": outside}}))
     log_path = STATE / f"{Path(wt).name}.log"
     seen, partial = {"cost": 0.0, "text": []}, ""
     with tempfile.TemporaryDirectory() as tmp, open(log_path, "a") as log:
+        gh_config = Path(tmp, "gh")
+        gh_config.mkdir()
+        env = agent_env(wt, gh_config)
+        env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"permission": {"external_directory": outside}})
         out = Path(tmp, "out")
         # The prompt goes through stdin: one argv string is capped at 128 KiB, and a review prompt
         # carries the whole diff.
@@ -335,8 +406,36 @@ def reconcile(nodes, repo=None):
         print(f"{node.id}: removed {wt}")
 
 
+def check_agent_auth():
+    """Live probe of the agent token: it reads issues, and GitHub itself refuses its pushes."""
+    ok = True
+    with tempfile.TemporaryDirectory() as tmp:
+        for repo in REPOS:
+            checkout = ROOT / f"talent-scout-{repo}"
+            env = agent_env(checkout, tmp)
+            issues = subprocess.run(["gh", "issue", "list", "--limit", "1", "--json", "number"], cwd=checkout,
+                                    env=env, capture_output=True, text=True)
+            # --dry-run never writes; GitHub answers the receive-pack request with 403 before any ref moves.
+            push = subprocess.run(["git", "push", "--dry-run", "origin", "HEAD:refs/heads/agent-token-probe"],
+                                  cwd=checkout, env=env, capture_output=True, text=True)
+            read_ok = issues.returncode == 0
+            push_refused = push.returncode != 0 and "403" in push.stderr
+            print(f"{repo}: read issues {'ok' if read_ok else 'FAILED'}; "
+                  f"push {'refused by GitHub (403)' if push_refused else 'NOT refused with 403'}")
+            if not read_ok:
+                print("  " + issues.stderr.strip().replace("\n", "\n  "))
+            if not push_refused:
+                print("  " + push.stderr.strip().replace("\n", "\n  "))
+            ok = ok and read_ok and push_refused
+        status = subprocess.run(["gh", "auth", "status"], env=env, capture_output=True, text=True)
+        print((status.stdout + status.stderr).strip())  # gh masks the token itself
+    return 0 if ok else 1
+
+
 def main():
     argv = sys.argv
+    if "--check-agent-auth" in argv:
+        sys.exit(check_agent_auth())
     only = argv[argv.index("--node") + 1] if "--node" in argv else None
     repo = argv[argv.index("--repo") + 1] if "--repo" in argv else None
     cfg = config()
