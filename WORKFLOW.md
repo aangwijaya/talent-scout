@@ -109,3 +109,17 @@ Like the planning skills, they need a human, so a headless agent must never load
 
 - `ops/env/client.env.agent` and `ops/env/server.env.agent`: agent credentials only, pointing at a separate Supabase project, with `LLM_MODE=fake` and `EMAIL_MODE=log`. They are gitignored.
 - Required status checks on `main`: client `checks` and `contract`, server `test`.
+
+## Agent GitHub token
+
+Agents never use your `gh` login. `ops/run` gives them their own token and an allowlisted env (`AGENT_ENV_KEEP` in `ops/run`); everything else in your shell, such as database URLs and API keys, is dropped.
+
+- **Scope:** a fine-grained token for `talent-scout-client` and `talent-scout-server` only, with Issues read/write and Metadata read. No Contents, Pull requests or Workflows access. Agents can read and file issues; GitHub itself refuses their pushes. Pushing, opening PRs and merging stay with `ops/run`, which uses your `gh`.
+- **Where:** `ops/env/agent.gh-token`, gitignored, mode 600. `ops/run` refuses to start an agent without it, or if it is not a `github_pat_` token.
+- **Save it** without it showing on screen or in shell history:
+
+  ```bash
+  read -rs T && printf '%s' "$T" > ops/env/agent.gh-token && chmod 600 ops/env/agent.gh-token && unset T
+  ```
+- **Check it:** `ops/run --check-agent-auth` must print "read issues ok" and "push refused by GitHub (403)" for both repos.
+- **Rotate** before it expires (90 days): generate a new token with the same scope, save it the same way, run the check, then delete the old token on GitHub.
