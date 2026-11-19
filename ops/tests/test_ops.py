@@ -545,6 +545,34 @@ class ContractSync(unittest.TestCase):
         code, _ = self.run_sync("", "--check")
         self.assertEqual(code, 1)
 
+    def test_the_sync_pr_regenerates_the_api_types_before_committing(self):
+        sync = load_script("contract-sync")
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            def fake_sh(cmd, cwd=None, check=True):
+                calls.append(cmd)
+                if cmd[:3] == ["git", "worktree", "add"]:
+                    for path in sync.FILES.values():
+                        Path(cmd[4], path).parent.mkdir(parents=True, exist_ok=True)
+                out = "abcdef1234567890\n" if cmd[:2] == ["git", "rev-parse"] else ""
+                if cmd[:2] == ["git", "show"] and cmd[2].endswith("contract.lock"):
+                    out = json.dumps({"files": {}})
+                return subprocess.CompletedProcess(cmd, 0, out, "")
+
+            sync.ROOT, sync.sh, sync.gh = Path(tmp), fake_sh, lambda *a: ""
+            old = sys.argv
+            sys.argv = ["contract-sync"]
+            try:
+                self.assertEqual(sync.main(), 0)
+            finally:
+                sys.argv = old
+        # CI fails the PR when schema.d.ts lags openapi.yaml, so the types are regenerated before the commit.
+        install = calls.index(["pnpm", "install", "--frozen-lockfile"])
+        gen = calls.index(["pnpm", "gen:api"])
+        add = calls.index(["git", "add", "-A"])
+        self.assertLess(install, gen)
+        self.assertLess(gen, add)
+
 
 class Reconcile(unittest.TestCase):
     def git(self, *args, cwd):

@@ -45,6 +45,9 @@ def main():
     for path, text in contents.items():
         (wt / FILES[path]).write_text(text)
     (wt / "contract.lock").write_text(json.dumps({"server_commit": head, "files": hashes}, indent=2) + "\n")
+    # CI fails the PR when schema.d.ts lags openapi.yaml, so regenerate the types in the same commit.
+    sh(["pnpm", "install", "--frozen-lockfile"], cwd=wt)
+    sh(["pnpm", "gen:api"], cwd=wt)
     sh(["git", "add", "-A"], cwd=wt)
     sh(["git", "commit", "-qm", f"chore: pin contract to server {head[:8]}"], cwd=wt)
     sh(["git", "push", "-q", "-u", "origin", "HEAD"], cwd=wt)
