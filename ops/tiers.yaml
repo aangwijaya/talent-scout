@@ -15,5 +15,8 @@ opencode_model: opencode-go/deepseek-v4.1-flash
 opencode_effort: high
 budget_usd: 6
 timeout_min: 60
+# The independent review gets its own budget, and OpenCode is stopped after this long with no output.
+review_timeout_min: 20
+idle_min: 10
 max_attempts: 3
 ci_wait_min: 20
