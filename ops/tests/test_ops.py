@@ -514,6 +514,37 @@ class KillSwitch(unittest.TestCase):
             self.assertLess(time.time() - started, 15)
 
 
+    def test_opencode_is_stopped_when_it_goes_quiet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            step = json.dumps({"type": "step_start", "part": {}})
+            run = self.fake_opencode(tmp, f"echo '{step}'\nsleep 60\n")
+            run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+            old_path = os.environ["PATH"]
+            os.environ["PATH"] = f"{tmp}:{old_path}"
+            started = time.time()
+            try:
+                with self.assertRaisesRegex(run.Stop, "no output for"):
+                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "idle_min": 0.05, "budget_usd": 3,
+                                                         "opencode_model": "m"})
+            finally:
+                os.environ["PATH"] = old_path
+            self.assertLess(time.time() - started, 15)
+
+    def test_a_stalled_review_is_reported_on_the_pr_instead_of_blocking(self):
+        run = load_script("run")
+        comments = []
+
+        def stalled(agent, prompt, wt, cfg, read_only=False):
+            self.assertEqual(cfg["timeout_min"], 20, "the review runs on its own, shorter budget")
+            raise run.Stop("no output for 10 min")
+
+        run.run_agent, run.gh = stalled, lambda *a: comments.append(a) or ""
+        run.sh = lambda cmd, cwd=None, check=True: subprocess.CompletedProcess(cmd, 0, "node/1-x\n", "")
+        findings = run.independent_review(node(1), "/tmp", {"timeout_min": 60, "review_timeout_min": 20})
+        self.assertIsNone(findings)
+        self.assertEqual(run.REVIEW_UNAVAILABLE, "no output for 10 min")
+        self.assertTrue(any("Independent review unavailable" in str(c) for c in comments))
+
 class ContractSync(unittest.TestCase):
     def run_sync(self, open_pr, *args):
         sync = load_script("contract-sync")
