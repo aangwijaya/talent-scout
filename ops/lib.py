@@ -78,6 +78,14 @@ def sh(cmd, cwd=None, timeout=None, check=True, env=None):
     return done
 
 
+def run_code(command, cwd, repo, cfg, timeout=None, extra_mounts=()):
+    """Run a shell command that executes code from a worktree: in the sandbox, or on the host with the
+    check env during the pilot. Container mode never falls back to the host (ADR 0002)."""
+    import container
+    if container.mode(cfg) == "host":
+        return sh(command, cwd=cwd, check=False, timeout=timeout, env=check_env())
+    return container.run_code(command, cwd, repo, cfg, timeout=timeout, extra_mounts=extra_mounts)
+
 def gh(*args):
     return sh(["gh", *args]).stdout
 

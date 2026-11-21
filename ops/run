@@ -4,8 +4,10 @@
 ops/run [--repo client|server] [--node client#15] [--once] [--auto]
 ops/run --reconcile   tidy labels and worktrees after you merge
 ops/run --check-agent-auth   prove the agent token reads issues and cannot push
+ops/run --check-sandbox   prove the sandbox walls from inside each image
 Without --auto every outward step asks first. Run one process per repo for parallel work.
 """
+import contextlib
 import json
 import os
 import re
@@ -21,6 +23,7 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import importlib.machinery
 import importlib.util
 
+import container
 from checks import feedback, gate, saw_key
 from lib import (AGENT_LOGIN_KEEP, AGENTS, HANDOFF_DIR, HANDOFF_MARK, OPS, PROXY_ENV_KEEP, REPOS, ROOT, STATE,
                  STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, check_env, config, gh, handoff_path, load_nodes,
@@ -125,12 +128,17 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     global LAST_AGENT_ERROR
     LAST_AGENT_ERROR = None
     HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
+    boxed = container.mode(cfg) == "container"
+    repo = Path(wt).name.split("-")[0]
+    if boxed:
+        container.require_image(repo)  # fail closed before anything starts
     if agent == "claude":
         claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
         tools = ["Read", "Glob", "Grep"] if read_only else CLAUDE_TOOLS
-        cmd = [claude, "-p", "--model", cfg["claude_model"], "--effort", cfg["claude_effort"],
+        dirs = [str(HANDOFF_DIR)] + ([go_mod_cache()] if not boxed or repo == "server" else [])
+        cmd = ["claude" if boxed else claude, "-p", "--model", cfg["claude_model"], "--effort", cfg["claude_effort"],
                "--max-budget-usd", str(cfg["budget_usd"]), "--no-session-persistence",
-               "--add-dir", str(HANDOFF_DIR), go_mod_cache(), "--allowedTools", *tools]
+               "--add-dir", *dirs, "--allowedTools", *tools]
         if not read_only:
             cmd += ["--permission-mode", "acceptEdits"]
     else:
@@ -146,11 +154,22 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     outside = {"*": "deny", f"{go_mod_cache()}/**": "allow", f"{HANDOFF_DIR}/*": "allow"}
     log_path = STATE / f"{Path(wt).name}.log"
     seen, partial = {"cost": 0.0, "text": []}, ""
-    with tempfile.TemporaryDirectory() as tmp, open(log_path, "a") as log:
+    with tempfile.TemporaryDirectory() as tmp, open(log_path, "a") as log, contextlib.ExitStack() as stack:
         gh_config = Path(tmp, "gh")
         gh_config.mkdir()
         env = agent_env(wt, gh_config)
         env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"permission": {"external_directory": outside}})
+        box_name = None
+        if boxed:
+            if agent == "claude":
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = container.claude_token()
+            home = stack.enter_context(container.agent_home())
+            env_path = stack.enter_context(container.env_file(container.container_env(env)))
+            mounts = container.agent_mounts(wt, read_only, HANDOFF_DIR, home) + container.cache_mounts(repo)
+            box_name = f"ts-{agent}-{Path(wt).name}-{int(time.time())}"
+            cmd = container.podman_argv(repo, cfg, wt, cmd, env_path, mounts=mounts, read_only=read_only,
+                                        name=box_name)
+            env = dict(os.environ)  # for podman itself; the agent sees only the env file
         out = Path(tmp, "out")
         # The prompt goes through stdin: one argv string is capped at 128 KiB, and a review prompt
         # carries the whole diff.
@@ -183,6 +202,8 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
                 if STOP_FILE.exists() or time.time() > deadline or over_budget or idle:
                     os.killpg(child.pid, signal.SIGTERM)
                     child.wait(30)
+                    if box_name:
+                        subprocess.run([container.PODMAN, "rm", "-f", "--ignore", box_name], capture_output=True)
                     raise Stop("stop requested" if STOP_FILE.exists() else
                                f"cost budget spent (${seen['cost']:.2f})" if over_budget else
                                f"no output for {cfg.get('idle_min', 10):g} min" if idle else "time budget spent")
@@ -204,12 +225,18 @@ def prepare(node):
         sh(["git", "worktree", "add", "-q", str(wt), "-b", f"node/{node.number}-{slug}",
             "--no-track", "origin/main"], cwd=checkout)
         if node.repo == "client":
+            cfg = config()
             # The client build reads its local, non-production values from .env. Nothing the server agent
             # runs reads .env (config and the live tests use the process env), so its secrets stay out.
             agent_env = OPS / "env" / "client.env.agent"
             if agent_env.exists():
                 shutil.copy2(agent_env, wt / ".env")
-            sh(["pnpm", "install", "--frozen-lockfile"], cwd=wt, timeout=600, env=check_env())
+            if container.mode(cfg) == "container":
+                done = container.run_code("pnpm install --frozen-lockfile", str(wt), "client", cfg, timeout=600)
+                if done.returncode:
+                    raise RuntimeError(f"pnpm install in the sandbox: {done.stderr.strip()[-500:]}")
+            else:
+                sh(["pnpm", "install", "--frozen-lockfile"], cwd=wt, timeout=600, env=check_env())
     return wt
 
 
@@ -425,15 +452,37 @@ def check_agent_auth():
     return 0 if ok else 1
 
 
+def check_sandbox(repos=REPOS):
+    """Prove the sandbox walls from inside each image (ADR 0002). PENDING walls arrive in later stages."""
+    cfg = {**config(), "sandbox": "container"}
+    ok = True
+    for repo in repos:
+        try:
+            lines = container.probe(repo, cfg)
+        except container.SandboxError as err:
+            lines = [f"FAIL image: {err}"]
+        print(f"{repo}:")
+        for line in lines:
+            print(f"  {line}")
+        ok = ok and not any(line.startswith("FAIL") for line in lines)
+    return 0 if ok else 1
+
+
 def main():
     argv = sys.argv
     if "--check-agent-auth" in argv:
         sys.exit(check_agent_auth())
+    if "--check-sandbox" in argv:
+        sys.exit(check_sandbox())
     only = argv[argv.index("--node") + 1] if "--node" in argv else None
     repo = argv[argv.index("--repo") + 1] if "--repo" in argv else None
     cfg = config()
     if "--reconcile" in argv:
         return reconcile(load_nodes(ttl=0), repo)
+    if container.mode(cfg) == "container":
+        # Before the first node of a session, the walls must hold; otherwise nothing runs.
+        if check_sandbox([repo] if repo else list(REPOS)):
+            raise SystemExit("sandbox check failed; see above. Nothing ran.")
     while not STOP_FILE.exists():
         # Only the client runner owns the contract pin; exit 1 is drift, other codes are errors.
         if (repo or (only or "").split("#")[0]) != "server" and sh([str(OPS / "contract-sync"), "--check"], check=False).returncode == 1:

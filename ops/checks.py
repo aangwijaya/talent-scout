@@ -5,7 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from lib import CONTRACT_FILES, GREEN, HANDOFF_FIELDS, check_env, matches, parse_handoff, sh, tier_of
+from lib import CONTRACT_FILES, GREEN, HANDOFF_FIELDS, matches, parse_handoff, run_code, sh, tier_of
 
 SECRET = re.compile(r"sk-or-[A-Za-z0-9-]{10,}|sb_secret_[A-Za-z0-9_-]{10,}|GOCSPX-[A-Za-z0-9_-]{10,}"
                     r"|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|postgres(ql)?://[^<\s:]+:[^<\s@]+@")
@@ -68,16 +68,16 @@ def check_handoff(text):
     return []
 
 
-def run_commands(commands, wt, name):
+def run_commands(commands, wt, name, repo="server", cfg=None):
     for command in commands:
-        done = sh(command, cwd=wt, check=False, timeout=1200, env=check_env())
+        done = run_code(command, wt, repo, cfg or {}, timeout=1200)
         if done.returncode:
             tail = (done.stdout + done.stderr).strip()[-1500:]
             return [fail(name, f"`{command}` exits 0", tail)]
     return []
 
 
-def check_red(wt, base, files, block, cfg):
+def check_red(wt, base, files, block, cfg, repo="server"):
     """The node's new tests must fail on the base commit, or they prove nothing."""
     code = [f for f in files if not matches(f, cfg["tier1"])]
     if not code or block.get("red") == "false":
@@ -98,7 +98,9 @@ def check_red(wt, base, files, block, cfg):
             shutil.copy2(Path(wt) / test, target)
         if (Path(wt) / "node_modules").exists():
             (tmp / "node_modules").symlink_to(Path(wt).resolve() / "node_modules")
-        if all(sh(c, cwd=tmp, check=False, timeout=600, env=check_env()).returncode == 0 for c in commands):
+        # node_modules is a symlink into the worktree, so the worktree is mounted read-only beside it.
+        mounts = [(str(Path(wt).resolve()), "ro")]
+        if all(run_code(c, str(tmp), repo, cfg, timeout=600, extra_mounts=mounts).returncode == 0 for c in commands):
             return [fail("red", "new tests fail on the base commit", "they pass without the change")]
         return []
     finally:
@@ -116,9 +118,9 @@ def gate(node, wt, cfg, handoff_text, base="origin/main", run_green=True):
     failures += check_contract(files, node.labels)
     failures += check_secrets(wt, base, files)
     if run_green and not failures:
-        failures += run_commands(GREEN[node.repo] + block.get("checks", []), wt, "green")
+        failures += run_commands(GREEN[node.repo] + block.get("checks", []), wt, "green", node.repo, cfg)
     if not failures:
-        failures += check_red(wt, base, files, block, cfg)
+        failures += check_red(wt, base, files, block, cfg, node.repo)
     return {"tier": tier_of(files, cfg), "files": files, "failures": failures}
 
 

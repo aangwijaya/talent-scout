@@ -1,0 +1,32 @@
+# Sandbox images for agent runs and checks (ADR 0003). Build with: ops/sandbox build [client|server]
+# Every version is pinned; the tag is a hash of this file, so changing a version means a rebuild.
+ARG GO_IMAGE=docker.io/library/golang:1.27.4-bookworm
+ARG NODE_IMAGE=docker.io/library/node:24.19.0-bookworm-slim
+
+FROM ${GO_IMAGE} AS go
+
+FROM ${NODE_IMAGE} AS base
+ARG PNPM_VERSION=12.18.0
+ARG CLAUDE_CODE_VERSION=2.1.319
+ARG OPENCODE_VERSION=1.18.35
+ARG GH_VERSION=2.103.3
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+    | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_amd64/bin/gh"
+ENV COREPACK_ENABLE_AUTO_PIN=0 COREPACK_HOME=/opt/corepack LANG=C.UTF-8
+RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate && chmod -R a+rX /opt/corepack \
+ && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "opencode-ai@${OPENCODE_VERSION}" \
+ && npm cache clean --force
+# Runs as the host user through --userns=keep-id; HOME is a throwaway tmpfs per run.
+
+FROM base AS server
+COPY --from=go /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOPROXY=https://proxy.golang.org GOFLAGS=-modcacherw
+
+FROM base AS client
+ARG PLAYWRIGHT_VERSION=1.64.1
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium \
+ && chmod -R a+rX /opt/ms-playwright && rm -rf /var/lib/apt/lists/* /root/.npm
