@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Agent workflow</title>
+<style>
+@font-face { font-family: Inter; src: url(../fonts/inter-latin-wght-normal.woff2) format('woff2'); font-weight: 100 900; }
+@font-face { font-family: 'Roboto Mono'; src: url(../fonts/roboto-mono-latin-500-normal.woff2) format('woff2'); font-weight: 500; }
+:root {
+  --canvas: #fcfcfc; --wash: #f0f4fe; --card: #ffffff; --subtle: #f1f5f9; --line: #e2e8f0;
+  --ink: #020520; --body: #14141e; --muted: #374151; --helper: #6b7280;
+  --brand: #145aff; --success: #16ca2e; --success-text: #15803d; --danger-text: #b91c1c;
+  --warning: #ffa64d; --warning-text: #b45309; --violet: #6d28d9;
+  --t-human: #fff1e3; --t-sup: #e8efff; --t-code: #e9f9ec; --t-agent: #eef2ff; --t-rev: #f1ebfd;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #d9dde6; font-family: Inter, system-ui, sans-serif; color: var(--body); -webkit-font-smoothing: antialiased; }
+.slide { width: 1080px; height: 1350px; position: relative; overflow: hidden; margin: 0 auto 40px;
+  background: radial-gradient(1200px 700px at 85% -10%, #dfe8ff 0%, rgba(223,232,255,0) 60%), var(--canvas);
+  padding: 84px 80px 64px; display: flex; flex-direction: column; }
+.kicker { font-family: 'Roboto Mono', monospace; font-size: 22px; letter-spacing: .08em; text-transform: uppercase; color: var(--brand); display: flex; align-items: center; gap: 14px; }
+.kicker .num { background: var(--brand); color: #fff; border-radius: 8px; padding: 4px 10px; font-size: 20px; }
+h1 { font-size: 88px; line-height: 1.03; letter-spacing: -0.035em; font-weight: 600; color: var(--ink); margin-top: 28px; }
+h2 { font-size: 56px; line-height: 1.06; letter-spacing: -0.03em; font-weight: 600; color: var(--ink); margin-top: 20px; }
+.hl { color: var(--brand); }
+.lede { font-size: 27px; line-height: 1.4; color: var(--muted); margin-top: 20px; max-width: 900px; }
+.foot { margin-top: auto; display: flex; justify-content: space-between; align-items: center; font-size: 20px; color: var(--helper); padding-top: 22px; }
+.foot .who { font-weight: 600; color: var(--ink); }
+.mono { font-family: 'Roboto Mono', monospace; }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 22px; }
+.pill { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; padding: 6px 14px; font-size: 18px; font-weight: 500; border: 1px solid var(--line); background: var(--card); color: var(--muted); }
+.pill i { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
+.panel { margin-top: 26px; background: var(--wash); border: 1px solid #dbe4fb; border-radius: 24px; padding: 14px; }
+svg text { font-family: Inter, sans-serif; }
+.t { font-size: 22px; font-weight: 600; fill: #020520; }
+.s { font-family: 'Roboto Mono', monospace; font-size: 15px; fill: #374151; }
+.e { font-family: 'Roboto Mono', monospace; font-size: 15px; fill: #475569; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; }
+.row { display: grid; gap: 14px; }
+.chip { display: inline-block; font-size: 16px; font-weight: 600; border-radius: 999px; padding: 4px 12px; }
+.callout { border-radius: 18px; background: var(--ink); color: #fff; padding: 24px 28px; font-size: 24px; line-height: 1.38; margin-top: 22px; }
+.callout b { color: #9db9ff; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- 1 COVER -->
+<section class="slide" id="w1">
+  <div class="kicker"><span class="num">01</span> How I build with AI agents</div>
+  <h1>One human.<br>A team of agents.<br><span class="hl">Clear lanes.</span></h1>
+  <p class="lede">This is how I run a lead agent, a code orchestrator, two coding agents, their cross-reviewers and a verifier. Every agent works in a sandbox. Code gates every step, and I hold the last key.</p>
+  <div class="panel" style="margin-top:44px;padding:28px">
+    <svg viewBox="0 0 880 300" width="100%">
+      <defs><marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#64748b"/></marker></defs>
+      <g fill="none" stroke="#64748b" stroke-width="2.4" marker-end="url(#c1)">
+        <path d="M150 80 H198"/><path d="M372 80 H420"/><path d="M594 80 H642"/>
+        <path d="M730 118 V160 C730 190 700 200 670 200 H600"/>
+        <path d="M420 230 H372"/><path d="M198 230 H150"/>
+      </g>
+      <path d="M75 190 V118" fill="none" stroke="#b45309" stroke-width="2.4" stroke-dasharray="7 6" marker-end="url(#c1)"/>
+      <g>
+        <rect x="0" y="42" width="150" height="76" rx="16" fill="#fff1e3" stroke="#ffa64d" stroke-width="2"/><text class="t" x="20" y="76">Me</text><text class="s" x="20" y="100">decides</text>
+        <rect x="200" y="42" width="172" height="76" rx="16" fill="#e8efff" stroke="#145aff" stroke-width="2"/><text class="t" x="220" y="76">Lead agent</text><text class="s" x="220" y="100">plan · nodes</text>
+        <rect x="422" y="42" width="172" height="76" rx="16" fill="#e9f9ec" stroke="#16ca2e" stroke-width="2"/><text class="t" x="442" y="76">Orchestrator</text><text class="s" x="442" y="100">ops/run · code</text>
+        <rect x="644" y="42" width="236" height="76" rx="16" fill="#fff" stroke="#145aff" stroke-width="2"/><text class="t" x="664" y="76">Coding agents</text><text class="s" x="664" y="100">in a sandbox</text>
+        <rect x="422" y="192" width="176" height="76" rx="16" fill="#f1ebfd" stroke="#6d28d9" stroke-width="2"/><text class="t" x="442" y="226">Cross-review</text><text class="s" x="442" y="250">other agent</text>
+        <rect x="200" y="192" width="172" height="76" rx="16" fill="#f1ebfd" stroke="#6d28d9" stroke-width="2"/><text class="t" x="220" y="226">Verifier</text><text class="s" x="220" y="250">sabotage tests</text>
+        <rect x="0" y="192" width="150" height="76" rx="16" fill="#fff1e3" stroke="#ffa64d" stroke-width="2"/><text class="t" x="20" y="226">Me</text><text class="s" x="20" y="250">merge</text>
+      </g>
+    </svg>
+  </div>
+  <div class="row" style="grid-template-columns:1fr 1fr 1fr;margin-top:22px">
+    <div class="card" style="padding:24px"><div style="font-size:52px;font-weight:600;color:var(--ink);letter-spacing:-.03em">5</div><div style="font-size:20px;color:var(--muted);margin-top:6px">agent roles</div></div>
+    <div class="card" style="padding:24px"><div style="font-size:52px;font-weight:600;color:var(--ink);letter-spacing:-.03em">4</div><div style="font-size:20px;color:var(--muted);margin-top:6px">sandbox walls per agent</div></div>
+    <div class="card" style="padding:24px"><div style="font-size:52px;font-weight:600;color:var(--brand);letter-spacing:-.03em">1</div><div style="font-size:20px;color:var(--muted);margin-top:6px">human with the last key</div></div>
+  </div>
+  <div class="foot"><span class="who">Talent Scout · build log</span><span>Swipe →</span></div>
+</section>
+
+<!-- 2 THE CAST -->
+<section class="slide" id="w2">
+  <div class="kicker"><span class="num">02</span> The cast</div>
+  <h2>Who does what</h2>
+  <p class="lede" style="font-size:24px">Each role has one job and only the access that job needs.</p>
+  <div class="row" style="margin-top:28px">
+    <div class="card" style="display:grid;grid-template-columns:70px 1fr;gap:18px;padding:20px 22px;align-items:center;border-left:6px solid var(--warning)"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg><div><b style="font-size:26px;color:var(--ink)">Me, the human</b><div style="font-size:20px;color:var(--muted);margin-top:4px;line-height:1.35">Decides what to build and approves plans, mockups and contracts. Holds every secret, runs production and live-model steps, and merges every PR.</div></div></div>
+    <div class="card" style="display:grid;grid-template-columns:70px 1fr;gap:18px;padding:20px 22px;align-items:center;border-left:6px solid var(--brand)"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#145aff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3M7 9l3 2-3 2M12 13h4"/></svg><div><b style="font-size:26px;color:var(--ink)">Lead agent · Claude Code</b><div style="font-size:20px;color:var(--muted);margin-top:4px;line-height:1.35">Works with me in the control plane. It grills the plan, mocks up screens, writes issues as fenced nodes, verifies every PR and turns findings into decisions for me. It never dispatches work.</div></div></div>
+    <div class="card" style="display:grid;grid-template-columns:70px 1fr;gap:18px;padding:20px 22px;align-items:center;border-left:6px solid var(--success)"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#15803d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.5 6h7M7.2 8.2l3.6 7.6M16.8 8.2l-3.6 7.6"/></svg><div><b style="font-size:26px;color:var(--ink)">Orchestrator · ops/run</b><div style="font-size:20px;color:var(--muted);margin-top:4px;line-height:1.35">Plain code, not an LLM, so no model decides the flow. It picks the next ready node, builds the sandbox, runs the gate, pushes and opens PRs with my login, and starts the review.</div></div></div>
+    <div class="card" style="display:grid;grid-template-columns:70px 1fr;gap:18px;padding:20px 22px;align-items:center;border-left:6px solid #7c9cff"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#145aff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></svg><div><b style="font-size:26px;color:var(--ink)">Client agent · Claude Code &nbsp;|&nbsp; Server agent · OpenCode</b><div style="font-size:20px;color:var(--muted);margin-top:4px;line-height:1.35">Claude Code builds the SvelteKit client and OpenCode builds the Go server. Each writes tests first, then the code, then a handoff.</div></div></div>
+    <div class="card" style="display:grid;grid-template-columns:70px 1fr;gap:18px;padding:20px 22px;align-items:center;border-left:6px solid var(--violet)"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#6d28d9" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8 11l2 2 4-4"/></svg><div><b style="font-size:26px;color:var(--ink)">Reviewer · the other agent &nbsp;|&nbsp; Verifier</b><div style="font-size:20px;color:var(--muted);margin-top:4px;line-height:1.35">A read-only session of the other agent reviews each PR. A verifier sub-agent then checks the review against the code and sabotages the tests.</div></div></div>
+  </div>
+  <div class="callout"><b>The lead agent has no production access either.</b> It prepares commands and SQL, dry-runs them on a test schema, and I run them.</div>
+  <div class="foot"><span class="who">Talent Scout · build log</span><span class="mono" style="font-size:18px">least privilege per role</span></div>
+</section>
+
+<!-- 3 FROM IDEA TO NODES -->
+<section class="slide" id="w3">
+  <div class="kicker"><span class="num">03</span> From idea to nodes</div>
+  <h2>I talk to one agent.<br>It turns ideas into a graph.</h2>
+  <div class="panel">
+    <svg viewBox="0 0 900 830" width="100%">
+      <defs><marker id="c3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#64748b"/></marker>
+      <marker id="c3o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#b45309"/></marker></defs>
+      <!-- top: me <-> supervisor -->
+      <rect x="30" y="30" width="300" height="90" rx="16" fill="#fff1e3" stroke="#ffa64d" stroke-width="2"/><text class="t" x="52" y="68">Me</text><text class="s" x="52" y="94">"add jobs, revamp the JD"</text>
+      <rect x="560" y="30" width="310" height="90" rx="16" fill="#e8efff" stroke="#145aff" stroke-width="2"/><text class="t" x="582" y="68">Lead agent</text><text class="s" x="582" y="94">reads the code, finds the gap</text>
+      <path d="M332 62 H556" stroke="#64748b" stroke-width="2.4" fill="none" marker-end="url(#c3)"/>
+      <path d="M556 92 H332" stroke="#b45309" stroke-width="2.4" stroke-dasharray="7 6" fill="none" marker-end="url(#c3o)"/>
+      <text class="e" x="420" y="52">idea</text><text class="e" x="360" y="116" fill="#b45309">questions · options</text>
+      <!-- three approvals -->
+      <g>
+        <rect x="30" y="180" width="270" height="118" rx="16" fill="#fff" stroke="#e2e8f0" stroke-width="2"/><text class="t" x="52" y="218">Grill the plan</text><text class="s" x="52" y="246">every decision settled</text><text class="s" x="52" y="270">before any code</text>
+        <rect x="315" y="180" width="270" height="118" rx="16" fill="#fff" stroke="#e2e8f0" stroke-width="2"/><text class="t" x="337" y="218">Mock up the UI</text><text class="s" x="337" y="246">shared design canvas</text><text class="s" x="337" y="270">I approve the visual</text>
+        <rect x="600" y="180" width="270" height="118" rx="16" fill="#fff" stroke="#e2e8f0" stroke-width="2"/><text class="t" x="622" y="218">Contract change</text><text class="s" x="622" y="246">API / events / PRD</text><text class="s" x="622" y="270">needs my approval</text>
+      </g>
+      <path d="M715 122 V176" stroke="#64748b" stroke-width="2.4" fill="none" marker-end="url(#c3)"/>
+      <path d="M450 300 V350" stroke="#64748b" stroke-width="2.4" fill="none" marker-end="url(#c3)"/>
+      <!-- node issue card -->
+      <rect x="180" y="356" width="540" height="190" rx="16" fill="#020520"/>
+      <text x="206" y="396" font-family="Inter" font-size="22" font-weight="600" fill="#fff">GitHub issue = one node</text>
+      <text x="206" y="436" font-family="Roboto Mono" font-size="18" fill="#9db9ff">fence:</text><text x="300" y="436" font-family="Roboto Mono" font-size="18" fill="#e2e8f0">[src/routes/s/*, tests/e2e/*]</text>
+      <text x="206" y="468" font-family="Roboto Mono" font-size="18" fill="#9db9ff">blocked_by:</text><text x="350" y="468" font-family="Roboto Mono" font-size="18" fill="#e2e8f0">[server#81]</text>
+      <text x="206" y="500" font-family="Roboto Mono" font-size="18" fill="#9db9ff">checks:</text><text x="310" y="500" font-family="Roboto Mono" font-size="18" fill="#e2e8f0">[pnpm test]</text>
+      <text x="206" y="530" font-family="Inter" font-size="16" fill="#b8c3e0">paths it may touch · real dependencies · proof</text>
+      <path d="M450 548 V592" stroke="#64748b" stroke-width="2.4" fill="none" marker-end="url(#c3)"/>
+      <!-- DAG -->
+      <text class="e" x="30" y="612">loop-graph · ops/next picks ready nodes</text>
+      <g font-family="Roboto Mono" font-size="17">
+        <rect x="30" y="684" width="150" height="56" rx="12" fill="#e9f9ec" stroke="#16ca2e" stroke-width="2"/><text x="52" y="718" fill="#15803d">server#81 ✓</text>
+        <rect x="250" y="644" width="150" height="56" rx="12" fill="#e8efff" stroke="#145aff" stroke-width="2"/><text x="272" y="678" fill="#145aff">client#82 ▶</text>
+        <rect x="250" y="728" width="150" height="56" rx="12" fill="#e8efff" stroke="#145aff" stroke-width="2"/><text x="272" y="762" fill="#145aff">client#83 ▶</text>
+        <rect x="470" y="728" width="150" height="56" rx="12" fill="#fff" stroke="#cbd5e1" stroke-width="2"/><text x="492" y="762" fill="#6b7280">client#85 …</text>
+        <rect x="470" y="644" width="150" height="56" rx="12" fill="#fff6ec" stroke="#ffa64d" stroke-width="2" stroke-dasharray="6 5"/><text x="492" y="678" fill="#b45309">gap#86 !</text>
+      </g>
+      <g stroke="#94a3b8" stroke-width="2" fill="none" marker-end="url(#c3)">
+        <path d="M182 704 C215 704 215 672 246 672"/><path d="M182 720 C215 720 215 756 246 756"/><path d="M402 756 H466"/>
+      </g>
+      <g font-family="Inter" font-size="17" fill="#374151">
+        <text x="650" y="668">gaps run first,</text><text x="650" y="692">then the node that</text><text x="650" y="716">unblocks the most.</text>
+        <text x="650" y="754">Status is computed</text><text x="650" y="778">from GitHub, not</text><text x="650" y="802">kept in a doc.</text>
+      </g>
+    </svg>
+  </div>
+  <div class="foot"><span class="who">Talent Scout · build log</span><span class="mono" style="font-size:18px">idea → plan → fenced nodes</span></div>
+</section>
+
+<!-- 4 ONE NODE LOOP -->
+<section class="slide" id="w4">
+  <div class="kicker"><span class="num">04</span> The loop inside one node</div>
+  <h2>Produce, check, correct.<br>Code decides what's true.</h2>
+  <div class="legend">
+    <span class="pill"><i style="background:#145aff"></i>Coding agent</span>
+    <span class="pill"><i style="background:#16ca2e"></i>Code</span>
+    <span class="pill"><i style="background:#6d28d9"></i>Other agent</span>
+    <span class="pill"><i style="background:#ffa64d"></i>Me</span>
+  </div>
+  <div class="panel">
+    <svg viewBox="0 0 900 840" width="100%">
+      <defs><marker id="c4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#64748b"/></marker>
+      <marker id="c4o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#b45309"/></marker></defs>
+      <g stroke="#64748b" stroke-width="2.4" fill="none" marker-end="url(#c4)">
+        <path d="M290 76 H346"/><path d="M610 76 H666"/>
+        <path d="M770 112 V176"/>
+        <path d="M666 212 H610"/><path d="M346 212 H290"/>
+        <path d="M150 248 V316"/>
+        <path d="M290 352 H346"/><path d="M610 352 H666"/>
+        <path d="M770 388 V456"/>
+      </g>
+      <!-- row1 -->
+      <rect x="30" y="40" width="260" height="72" rx="14" fill="#fff" stroke="#16ca2e" stroke-width="2.4"/><text class="t" x="50" y="72">Brief</text><text class="s" x="50" y="96">issue + lessons + fence</text>
+      <rect x="350" y="40" width="260" height="72" rx="14" fill="#fff" stroke="#145aff" stroke-width="2.4"/><text class="t" x="370" y="72">1 · Scope</text><text class="s" x="370" y="96">are the deps real?</text>
+      <rect x="670" y="40" width="200" height="72" rx="14" fill="#fff" stroke="#145aff" stroke-width="2.4"/><text class="t" x="690" y="72">2 · Red</text><text class="s" x="690" y="96">tests fail first</text>
+      <!-- row2 (right to left) -->
+      <rect x="670" y="176" width="200" height="72" rx="14" fill="#fff" stroke="#145aff" stroke-width="2.4"/><text class="t" x="690" y="208">3 · Green</text><text class="s" x="690" y="232">implement</text>
+      <rect x="350" y="176" width="260" height="72" rx="14" fill="#fff" stroke="#145aff" stroke-width="2.4"/><text class="t" x="370" y="208">4 · Handoff</text><text class="s" x="370" y="232">changed · tested · gaps</text>
+      <rect x="30" y="176" width="260" height="72" rx="14" fill="#effbf1" stroke="#16ca2e" stroke-width="2.4"/><text class="t" x="50" y="208">5 · Gate</text><text class="s" x="50" y="232">fence · contract · secrets</text>
+      <!-- row3 -->
+      <rect x="30" y="316" width="260" height="72" rx="14" fill="#effbf1" stroke="#16ca2e" stroke-width="2.4"/><text class="t" x="50" y="348">6 · PR + CI</text><text class="s" x="50" y="372">pushed by the orchestrator</text>
+      <rect x="350" y="316" width="260" height="72" rx="14" fill="#f5f0fe" stroke="#6d28d9" stroke-width="2.4"/><text class="t" x="370" y="348">7 · Review</text><text class="s" x="370" y="372">other agent, read-only</text>
+      <rect x="670" y="316" width="200" height="72" rx="14" fill="#f5f0fe" stroke="#6d28d9" stroke-width="2.4"/><text class="t" x="690" y="348">8 · Verify</text><text class="s" x="690" y="372">sabotage tests</text>
+      <!-- end -->
+      <rect x="600" y="460" width="270" height="80" rx="14" fill="#fff6ec" stroke="#ffa64d" stroke-width="2.4"/><text class="t" x="620" y="494">9 · I merge</text><text class="s" x="620" y="518">or: fix · send back</text>
+      <!-- failure loop -->
+      <path d="M30 230 C0 230 0 140 40 130 H680 Q700 130 700 120 V114" stroke="#b45309" stroke-width="2.4" stroke-dasharray="7 6" fill="none" marker-end="url(#c4o)"/>
+      <text class="e" x="64" y="150" fill="#b45309">gate fails → EXPECTED / SAW / FENCE / DEAD ENDS → retry</text>
+      <!-- escalation and gap side cards -->
+      <rect x="30" y="460" width="530" height="80" rx="14" fill="#fff" stroke="#e2e8f0" stroke-width="2"/>
+      <text class="t" x="50" y="494" style="font-size:20px">Same failure twice, or budget spent</text><text class="s" x="50" y="518">→ needs:human, other nodes keep going</text>
+      <rect x="30" y="566" width="530" height="80" rx="14" fill="#fff" stroke="#e2e8f0" stroke-width="2"/>
+      <text class="t" x="50" y="600" style="font-size:20px">Blocker outside the fence</text><text class="s" x="50" y="624">→ new type:gap node, runs first</text>
+      <rect x="600" y="566" width="270" height="80" rx="14" fill="#fff" stroke="#e2e8f0" stroke-width="2"/>
+      <text class="t" x="620" y="600" style="font-size:20px">Lesson learned</text><text class="s" x="620" y="624">→ docs/LESSONS.md</text>
+      <!-- tiers -->
+      <text class="e" x="30" y="700">merge rule by cost of undo (ops/tiers.yaml)</text>
+      <g font-family="Inter" font-size="18">
+        <rect x="30" y="716" width="270" height="96" rx="14" fill="#fff" stroke="#e2e8f0"/><text x="50" y="752" font-weight="600" fill="#020520">Tier 1 · docs, tests</text><text x="50" y="784" fill="#374151">green CI</text>
+        <rect x="315" y="716" width="270" height="96" rx="14" fill="#fff" stroke="#e2e8f0"/><text x="335" y="752" font-weight="600" fill="#020520">Tier 2 · pages, handlers</text><text x="335" y="784" fill="#374151">+ review, no High</text>
+        <rect x="600" y="716" width="270" height="96" rx="14" fill="#fff6ec" stroke="#ffa64d"/><text x="620" y="752" font-weight="600" fill="#020520">Tier 3 · contract, auth,</text><text x="620" y="784" fill="#374151">migrations, CI → me</text>
+      </g>
+    </svg>
+  </div>
+  <div class="foot"><span class="who">Talent Scout · build log</span><span class="mono" style="font-size:18px">automerge: [ ]  · pilot mode</span></div>
+</section>
+
+<!-- 5 SANDBOX -->
+<section class="slide" id="w5">
+  <div class="kicker"><span class="num">05</span> The sandbox</div>
+  <h2>Every agent runs<br>inside four walls</h2>
+  <p class="lede" style="font-size:24px">These limits are enforced by the orchestrator and by GitHub. Nothing depends on the agent behaving.</p>
+  <div style="margin-top:28px;position:relative">
+    <div style="border-radius:28px;border:2.5px solid #cbd5e1;background:#f8fafc;padding:26px 26px 28px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:23px;color:var(--ink)">4 · Run limits</b><span class="mono" style="font-size:17px;color:var(--muted)">$6 budget · 60 min · 3 attempts</span></div>
+      <div style="margin-top:14px;border-radius:24px;border:2.5px solid #c4b5fd;background:#faf7ff;padding:22px 22px 24px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:23px;color:var(--violet)">3 · Its own identity</b><span class="mono" style="font-size:17px;color:var(--muted)">GitHub token: issues only</span></div>
+        <div style="font-size:20px;color:var(--muted);margin-top:8px;line-height:1.4">No access to my gh login or SSH key. Git runs over HTTPS with the agent token, and <b style="color:var(--ink)">GitHub refuses its pushes (403)</b>.</div>
+        <div style="margin-top:14px;border-radius:20px;border:2.5px solid #93b4ff;background:#f4f7ff;padding:22px 22px 24px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:23px;color:var(--brand)">2 · A clean environment</b><span class="mono" style="font-size:17px;color:var(--muted)">allowlisted env vars</span></div>
+          <div style="font-size:20px;color:var(--muted);margin-top:8px;line-height:1.4">All other variables are dropped. It gets a separate Supabase project, <span class="mono">LLM_MODE=fake</span> and <span class="mono">EMAIL_MODE=log</span>.</div>
+          <div style="margin-top:14px;border-radius:16px;border:2.5px solid #86efac;background:#f2fcf4;padding:22px 22px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:23px;color:var(--success-text)">1 · A fenced worktree</b><span class="mono" style="font-size:17px;color:var(--muted)">one per node</span></div>
+            <div style="font-size:20px;color:var(--muted);margin-top:8px;line-height:1.4">It may change only the paths in its fence. Writes outside are denied, except its handoff file.</div>
+            <div style="margin-top:14px;display:flex;align-items:center;gap:14px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 18px"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#145aff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></svg><span style="font-size:20px;font-weight:600;color:var(--ink)">Coding agent: writes tests and code, runs them</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:22px;padding:22px 26px;border:2.5px solid var(--warning);background:#fffaf4">
+    <div style="display:flex;gap:14px;align-items:center"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><b style="font-size:23px;color:var(--ink)">Outside the walls, only I hold these</b></div>
+    <div style="font-size:21px;color:var(--muted);margin-top:8px;line-height:1.4">Production secrets and database · real model API keys · live-model test runs · migrations · push and merge.</div>
+  </div>
+  <div class="foot"><span class="who">Talent Scout · build log</span><span class="mono" style="font-size:18px">sandbox stage 0 · egress proxy next</span></div>
+</section>
+
+<!-- 6 CROSS REVIEW -->
+<section class="slide" id="w6">
+  <div class="kicker"><span class="num">06</span> Agents checking agents</div>
+  <h2>Nobody reviews<br>their own work</h2>
+  <div class="panel">
+    <svg viewBox="0 0 900 620" width="100%">
+      <defs><marker id="c6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#64748b"/></marker>
+      <marker id="c6v" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#6d28d9"/></marker></defs>
+      <text class="e" x="40" y="40">builds</text><text class="e" x="640" y="40">builds</text>
+      <rect x="30" y="56" width="300" height="100" rx="16" fill="#fff" stroke="#145aff" stroke-width="2.4"/><text class="t" x="52" y="96">Claude Code</text><text class="s" x="52" y="124">client · SvelteKit</text>
+      <rect x="570" y="56" width="300" height="100" rx="16" fill="#fff" stroke="#145aff" stroke-width="2.4"/><text class="t" x="592" y="96">OpenCode</text><text class="s" x="592" y="124">server · Go</text>
+            <g stroke="#64748b" stroke-width="2.4" fill="none" marker-end="url(#c6)"><path d="M180 158 V206"/><path d="M720 158 V206"/></g>
+      <rect x="30" y="210" width="300" height="70" rx="14" fill="#effbf1" stroke="#16ca2e" stroke-width="2.4"/><text class="t" x="52" y="252">Client PR</text>
+      <rect x="570" y="210" width="300" height="70" rx="14" fill="#effbf1" stroke="#16ca2e" stroke-width="2.4"/><text class="t" x="592" y="252">Server PR</text>
+      <!-- cross arrows -->
+      <g stroke="#6d28d9" stroke-width="2.4" fill="none" stroke-dasharray="7 6" marker-end="url(#c6v)">
+        <path d="M640 160 C560 190 420 210 334 236"/>
+        <path d="M260 160 C340 190 480 210 566 236"/>
+      </g>
+      <text x="450" y="312" text-anchor="middle" font-family="Roboto Mono" font-size="16" fill="#6d28d9">Claude reviews the server PR</text>
+      <text x="450" y="336" text-anchor="middle" font-family="Roboto Mono" font-size="16" fill="#6d28d9">OpenCode reviews the client PR</text>
+      <text x="450" y="364" text-anchor="middle" font-family="Inter" font-size="17" fill="#374151">read-only session · sees only the issue and the diff</text>
+      <g stroke="#64748b" stroke-width="2.4" fill="none" marker-end="url(#c6)"><path d="M180 282 V412 H396"/><path d="M720 282 V412 H504"/></g>
+      <rect x="400" y="392" width="100" height="40" rx="10" fill="#fff" stroke="#cbd5e1"/><text x="426" y="418" font-family="Roboto Mono" font-size="15" fill="#374151">ready</text>
+      <path d="M450 434 V470" stroke="#64748b" stroke-width="2.4" fill="none" marker-end="url(#c6)"/>
+      <rect x="140" y="474" width="620" height="124" rx="16" fill="#f5f0fe" stroke="#6d28d9" stroke-width="2.4"/>
+      <text class="t" x="166" y="514">pr-verifier · lead agent's sub-agent</text>
+      <text class="s" x="166" y="546">diff vs issue · fence · CI · each review finding vs code</text>
+      <text class="s" x="166" y="574">sabotage: break the code one line at a time → a test must fail</text>
+    </svg>
+  </div>
+  <div class="row" style="grid-template-columns:1fr 1fr 1fr;margin-top:18px">
+    <div class="card" style="padding:22px 24px"><span class="chip" style="background:#e9f9ec;color:var(--success-text)">Merge</span><div style="font-size:20px;color:var(--muted);margin-top:10px;line-height:1.38">I merge it myself</div></div>
+    <div class="card" style="padding:22px 24px"><span class="chip" style="background:#e8efff;color:var(--brand)">Fix directly</span><div style="font-size:20px;color:var(--muted);margin-top:10px;line-height:1.38">The lead agent patches small gaps on the PR</div></div>
+    <div class="card" style="padding:22px 24px"><span class="chip" style="background:#fff1e3;color:var(--warning-text)">Send back</span><div style="font-size:20px;color:var(--muted);margin-top:10px;line-height:1.38">The node reruns with the evidence</div></div>
+  </div>
+  <div class="foot"><span class="who">Talent Scout · build log</span><span class="mono" style="font-size:18px">the verifier reports, I choose</span></div>
+</section>
+
+<!-- 7 AFTER MERGE -->
+<section class="slide" id="w7">
+  <div class="kicker"><span class="num">07</span> After the merge</div>
+  <h2>The loop closes<br>and gets smarter</h2>
+  <div class="row" style="margin-top:34px">
+    <div class="card" style="display:grid;grid-template-columns:64px 1fr;gap:18px;padding:26px 24px;align-items:start"><span class="mono" style="width:52px;height:52px;border-radius:14px;background:var(--t-code);color:var(--success-text);display:grid;place-items:center;font-size:20px">01</span><div><b style="font-size:27px;color:var(--ink)">Reconcile</b><div style="font-size:21px;color:var(--muted);margin-top:6px;line-height:1.42"><span class="mono">ops/run --reconcile</span> drops stale labels and removes merged worktrees. Blocked nodes become ready.</div></div></div>
+    <div class="card" style="display:grid;grid-template-columns:64px 1fr;gap:18px;padding:26px 24px;align-items:start"><span class="mono" style="width:52px;height:52px;border-radius:14px;background:var(--t-code);color:var(--success-text);display:grid;place-items:center;font-size:20px">02</span><div><b style="font-size:27px;color:var(--ink)">Contract sync</b><div style="font-size:21px;color:var(--muted);margin-top:6px;line-height:1.42">When the server contract moves, the orchestrator opens a sync PR on the client. <span class="mono">contract.lock</span> pins the server commit and file hashes.</div></div></div>
+    <div class="card" style="display:grid;grid-template-columns:64px 1fr;gap:18px;padding:26px 24px;align-items:start"><span class="mono" style="width:52px;height:52px;border-radius:14px;background:var(--t-human);color:var(--warning-text);display:grid;place-items:center;font-size:20px">03</span><div><b style="font-size:27px;color:var(--ink)">Live gate</b><div style="font-size:21px;color:var(--muted);margin-top:6px;line-height:1.42">For prompt and model changes, I run three real CVs through real models with a capped key. The lead agent reads the log for cost, truncation and output.</div></div></div>
+    <div class="card" style="display:grid;grid-template-columns:64px 1fr;gap:18px;padding:26px 24px;align-items:start"><span class="mono" style="width:52px;height:52px;border-radius:14px;background:var(--t-human);color:var(--warning-text);display:grid;place-items:center;font-size:20px">04</span><div><b style="font-size:27px;color:var(--ink)">Production steps</b><div style="font-size:21px;color:var(--muted);margin-top:6px;line-height:1.42">Migrations and data changes are prepared and dry-run on a test schema. I run them on production.</div></div></div>
+    <div class="card" style="display:grid;grid-template-columns:64px 1fr;gap:18px;padding:26px 24px;align-items:start"><span class="mono" style="width:52px;height:52px;border-radius:14px;background:var(--t-rev);color:var(--violet);display:grid;place-items:center;font-size:20px">05</span><div><b style="font-size:27px;color:var(--ink)">Learning loop</b><div style="font-size:21px;color:var(--muted);margin-top:6px;line-height:1.42">Each node writes lessons to <span class="mono">docs/LESSONS.md</span>. A lesson that repeats becomes a skill-update node, and a check or lint rule beats more text.</div></div></div>
+  </div>
+  <div class="foot"><span class="who">Talent Scout · build log</span><span class="mono" style="font-size:18px">merge → reconcile → next node</span></div>
+</section>
+
+<!-- 8 CLOSE -->
+<section class="slide" id="w8">
+  <div class="kicker"><span class="num">08</span> The result</div>
+  <h2>Speed from agents.<br><span class="hl">Trust from the system.</span></h2>
+  <div class="row" style="grid-template-columns:1fr 1fr;margin-top:40px">
+    <div class="card" style="padding:38px 34px"><div style="font-size:84px;font-weight:600;letter-spacing:-.03em;color:var(--ink);line-height:1">88</div><div style="font-size:22px;color:var(--muted);margin-top:14px;line-height:1.35">PRs merged across two repos. I merged every one.</div></div>
+    <div class="card" style="padding:38px 34px"><div style="font-size:84px;font-weight:600;letter-spacing:-.03em;color:var(--ink);line-height:1">0</div><div style="font-size:22px;color:var(--muted);margin-top:14px;line-height:1.35">production credentials ever given to an agent.</div></div>
+    <div class="card" style="padding:38px 34px"><div style="font-size:84px;font-weight:600;letter-spacing:-.03em;color:var(--ink);line-height:1">5</div><div style="font-size:22px;color:var(--muted);margin-top:14px;line-height:1.35">agent roles: lead agent, two builders, a cross-reviewer and a verifier.</div></div>
+    <div class="card" style="padding:38px 34px"><div style="font-size:84px;font-weight:600;letter-spacing:-.03em;color:var(--ink);line-height:1">1</div><div style="font-size:22px;color:var(--muted);margin-top:14px;line-height:1.35">human holding the last key: secrets, production and merge.</div></div>
+  </div>
+  <div class="callout" style="margin-top:34px;font-size:30px;padding:30px 32px"><b>The point isn't the web app.</b> It's a way of working where agents move fast inside walls, code decides what's true, and a person makes the calls that matter.</div>
+  <div class="foot"><span class="who">Talent Scout · build log</span><span>Claude Code · OpenCode · GitHub</span></div>
+</section>
+
+</body>
+</html>
