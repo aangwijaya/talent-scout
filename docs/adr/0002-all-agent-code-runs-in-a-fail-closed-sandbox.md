@@ -28,6 +28,11 @@ If the sandbox cannot start, the node stops with a clear error and nothing runs 
   - the main `.git` is not writable;
   - no secrets are in the environment;
   - the memory limit holds.
-- Secrets that workers don't use with `LLM_MODE=fake` are removed from `ops/env/*.env.agent` (OpenRouter key, Supabase service-role key, database URL). A test database for agents would be a separate, later decision that adds its host to the allowlist.
+- Secrets workers don't use with `LLM_MODE=fake` never reach them:
+  - `server.env.agent`, with its OpenRouter key, Supabase service-role key and database URL, is not copied into the server worktree, because nothing the server agent runs reads `.env`.
+  - Checks run with a filtered environment.
+  - The files in `ops/env/` stay on the host for the human's live gate.
+  
+  A test database for agents would be a separate, later decision that adds its host to the allowlist.
 - The agent CLIs' logins are mounted minimally and read-only, and model keys used inside the sandbox have spend caps, so a leaked token has a bounded cost.
 - Outside the sandbox the orchestrator keeps only `git` (diff, fetch, push) and `gh`, using the human's login.

@@ -4,7 +4,7 @@ status: proposed
 
 # Podman rootless as the sandbox runtime
 
-The host is WSL2 with no working Docker (Docker Desktop's WSL integration is off), no Podman and no gVisor; bubblewrap and unprivileged user namespaces are available. We chose rootless Podman: real container isolation, no root daemon, the container user maps to the human's user, and images are reproducible from a Containerfile per repo in `ops/sandbox/`.
+The host is WSL2 with no working Docker (Docker Desktop's WSL integration is off), no Podman and no gVisor; bubblewrap and unprivileged user namespaces are available. We chose rootless Podman: real container isolation, no root daemon, the container user maps to the human's user, and images are reproducible from one pinned Containerfile in `ops/images/`.
 
 ## Considered Options
 
@@ -14,5 +14,5 @@ The host is WSL2 with no working Docker (Docker Desktop's WSL integration is off
 ## Consequences
 
 - The images carry their own toolchain (Go from a tarball, because the host's snap Go does not run in a container), Node, pnpm, Playwright browsers and both agent CLIs.
-- There is one image per repo, built from `ops/sandbox/Containerfile.<repo>`, with every version pinned and tagged by the Containerfile's hash. It is rebuilt only by an explicit `ops/sandbox build`, so agent CLI upgrades are deliberate. The orchestrator refuses to run if the exact tag is missing.
+- There is one image per repo: `client` and `server` targets of `ops/images/Containerfile` share a base, with every version pinned. Each is tagged by a hash of the Containerfile and its target. It is rebuilt only by an explicit `ops/sandbox build`, so agent CLI upgrades are deliberate. The orchestrator refuses to run if the exact tag is missing.
 - Installing Podman is a one-time human step on the host.
