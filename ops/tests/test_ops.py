@@ -638,6 +638,85 @@ class Reconcile(unittest.TestCase):
                                       "--remove-label", "status:review", "--remove-label", "needs:human")])
 
 
+class CheckEnv(Gate):
+    """Sandbox stage 1: commands that run code from a worktree get the toolchain env, never secrets."""
+    SECRETS = {"DATABASE_URL": "postgres://u:p@h/db", "OPENROUTER_API_KEY": "sk-or-fake",
+               "GITHUB_TOKEN": "ghp_human", "GH_TOKEN": "github_pat_human", "SSH_AUTH_SOCK": "/tmp/agent.sock",
+               "AWS_SECRET_ACCESS_KEY": "x", "ANTHROPIC_API_KEY": "sk-ant-x", "CLAUDE_CODE_OAUTH_TOKEN": "x"}
+
+    def setUp(self):
+        super().setUp()
+        self.saved = dict(os.environ)
+        os.environ.update(self.SECRETS)
+        self.dump = Path(self.wt).parent / f"env-{os.getpid()}-{id(self)}.txt"
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.saved)
+        self.dump.unlink(missing_ok=True)
+        super().tearDown()
+
+    def names(self):
+        return {line.split("=", 1)[0] for line in self.dump.read_text().splitlines() if "=" in line}
+
+    def assert_clean(self):
+        names = self.names()
+        for name in self.SECRETS:
+            self.assertNotIn(name, names)
+        self.assertIn("PATH", names)
+        self.assertLessEqual(names - {"PWD", "SHLVL", "_", "OLDPWD"}, set(lib.CHECK_ENV_KEEP))
+
+    def test_green_commands_get_no_secrets(self):
+        self.assertEqual(checks.run_commands([f"env > {self.dump}"], self.wt, "green"), [])
+        self.assert_clean()
+
+    def test_the_red_check_gets_no_secrets(self):
+        self.good_change()
+        # The command fails on the base commit, so red passes; it records the env it ran with.
+        result = self.run_gate(block=f"fence: [src/*, tests/*]\nchecks: [env > {self.dump}; false]\n")
+        self.assertNotIn("red", self.failed(result))
+        self.assert_clean()
+
+    def test_check_env_has_no_model_logins(self):
+        env = lib.check_env()
+        for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "GH_TOKEN"):
+            self.assertNotIn(name, env)
+        self.assertEqual(env["PATH"], os.environ["PATH"])
+
+    def test_dependency_install_gets_no_secrets(self):
+        run = load_script("run")
+        calls = []
+        with tempfile.TemporaryDirectory() as root:
+            def fake_sh(cmd, cwd=None, timeout=None, check=True, env=None):
+                calls.append((cmd, env))
+                if cmd[:3] == ["git", "worktree", "add"]:
+                    Path(cmd[4]).mkdir(parents=True)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            run.sh, run.ROOT, run.OPS = fake_sh, Path(root), Path(root, "ops")
+            run.prepare(node(7, repo="client"))
+        install = [env for cmd, env in calls if cmd[:2] == ["pnpm", "install"]]
+        self.assertEqual(len(install), 1)
+        self.assertIsNotNone(install[0], "pnpm install must not inherit the human's env")
+        for name in self.SECRETS:
+            self.assertNotIn(name, install[0])
+
+
+    def test_only_the_client_worktree_gets_an_env_file(self):
+        # Nothing the server agent runs reads .env (config and live tests use the process env only), so
+        # the server's agent secrets never enter its worktree. The client build needs its local values.
+        run = load_script("run")
+        with tempfile.TemporaryDirectory() as root:
+            def fake_sh(cmd, cwd=None, timeout=None, check=True, env=None):
+                if cmd[:3] == ["git", "worktree", "add"]:
+                    Path(cmd[4]).mkdir(parents=True)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            run.sh, run.ROOT, run.OPS = fake_sh, Path(root), Path(root, "ops")
+            Path(root, "ops", "env").mkdir(parents=True)
+            for repo in ("client", "server"):
+                Path(root, "ops", "env", f"{repo}.env.agent").write_text("SECRET=1\n")
+            self.assertTrue((run.prepare(node(7, repo="client")) / ".env").exists())
+            self.assertFalse((run.prepare(node(8, repo="server")) / ".env").exists())
+
 class AgentEnv(unittest.TestCase):
     """Sandbox stage 0: agents get an allowlisted env and their own GitHub token, never the human's."""
     SECRETS = {"DATABASE_URL": "postgres://u:p@h/db", "OPENROUTER_API_KEY": "sk-or-fake",
