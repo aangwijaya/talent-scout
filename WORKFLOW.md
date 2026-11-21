@@ -110,6 +110,19 @@ Like the planning skills, they need a human, so a headless agent must never load
 - `ops/env/client.env.agent` and `ops/env/server.env.agent`: agent credentials only, pointing at a separate Supabase project, with `LLM_MODE=fake` and `EMAIL_MODE=log`. They are gitignored.
 - Required status checks on `main`: client `checks` and `contract`, server `test`.
 
+## Sandbox (being built)
+
+Agents, reviewers and every command that runs code from a worktree are moving into a fail-closed sandbox: rootless Podman, an egress allowlist proxy, a per-node agent clone and a read-only warm cache. Until the pilot ends, `sandbox: host | container` in `ops/tiers.yaml` picks the mode. Host mode is removed after the pilot, and container mode never falls back to the host. The reasons are in `docs/adr/0002` to `0005`, and the vocabulary is in `GLOSSARY.md`.
+
+Stages, each its own PR to this repo:
+1. Strip unused secrets from `ops/env/*.env.agent`, and run green and red checks with the filtered agent environment.
+2. Podman images per repo (`ops/sandbox build`), runtime and limits, and `ops/run --check-sandbox`.
+3. Egress proxy with the allowlist and per-node logs. Refusals are surfaced in the handoff and `ops/triage`.
+4. Agent clone, with commits fetched into the human's repository with hooks disabled.
+5. Pilot on two nodes per repo, then remove host mode.
+
+Once stage 5 lands, this section will say what an agent can and cannot do, how to build images, and how to add an allowlisted host.
+
 ## Agent GitHub token
 
 Agents never use your `gh` login. `ops/run` gives them their own token and an allowlisted env (`AGENT_ENV_KEEP` in `ops/run`); everything else in your shell, such as database URLs and API keys, is dropped.
