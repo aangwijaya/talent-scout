@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Talent Scout motion</title>
+<style>
+@font-face { font-family: Inter; src: url(../fonts/inter-latin-wght-normal.woff2) format('woff2'); font-weight: 100 900; }
+@font-face { font-family: 'Roboto Mono'; src: url(../fonts/roboto-mono-latin-500-normal.woff2) format('woff2'); font-weight: 500; }
+:root {
+  --canvas: #fcfcfc; --wash: #f0f4fe; --card: #ffffff; --subtle: #f1f5f9; --line: #e2e8f0;
+  --ink: #020520; --body: #14141e; --muted: #374151; --helper: #6b7280;
+  --brand: #145aff; --success: #16ca2e; --success-text: #15803d; --warning: #ffa64d; --warning-text: #b45309;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1080px; height: 1350px; overflow: hidden; }
+body { font-family: Inter, sans-serif; color: var(--body); -webkit-font-smoothing: antialiased;
+  background: radial-gradient(1100px 800px at 90% -10%, #dbe6ff 0%, rgba(219,230,255,0) 60%), radial-gradient(900px 700px at -10% 110%, #e8efff 0%, rgba(232,239,255,0) 60%), var(--canvas); }
+.scene { position: absolute; inset: 0; padding: 90px 80px; opacity: 0; }
+.mono { font-family: 'Roboto Mono', monospace; }
+.logo { width: 120px; height: 120px; border-radius: 50%; background: var(--brand); display: grid; place-items: center; box-shadow: 0 20px 60px rgba(20,90,255,.35); }
+.kick { font-family: 'Roboto Mono'; font-size: 24px; letter-spacing: .1em; text-transform: uppercase; color: var(--brand); }
+.big { font-size: 84px; font-weight: 600; letter-spacing: -0.035em; line-height: 1.04; color: var(--ink); }
+.big .b { color: var(--brand); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 24px 60px rgba(2,5,32,.08); }
+
+/* chat */
+.chat { margin-top: 40px; padding: 30px; display: flex; flex-direction: column; gap: 18px; height: 900px; }
+.chead { display: flex; justify-content: space-between; align-items: center; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.chead b { font-size: 26px; color: var(--ink); }
+.chead span { font-size: 19px; color: var(--muted); }
+.topic { align-self: flex-start; font-size: 18px; font-weight: 600; color: var(--brand); background: var(--wash); border-radius: 999px; padding: 8px 16px; }
+.bub { max-width: 84%; border-radius: 22px; padding: 24px 28px; font-size: 30px; line-height: 1.42; }
+.ai { background: var(--wash); color: var(--body); border-top-left-radius: 6px; }
+.me { align-self: flex-end; background: var(--brand); color: #fff; border-top-right-radius: 6px; }
+.dots { display: inline-flex; gap: 9px; padding: 6px 2px; }
+.dots i { width: 13px; height: 13px; border-radius: 50%; background: #64748b; display: block; }
+.caret { display: inline-block; width: 3px; height: 30px; background: #fff; vertical-align: -5px; margin-left: 2px; }
+.entry { align-self: flex-end; font-size: 18px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+
+/* graph */
+.gnode { position: absolute; width: 240px; height: 92px; border-radius: 18px; background: #fff; border: 2.5px solid var(--line); padding: 16px 18px; }
+.gnode b { display: block; font-size: 24px; white-space: nowrap; font-weight: 600; color: var(--ink); }
+.gnode small { display: flex; gap: 8px; align-items: center; font-family: 'Roboto Mono'; font-size: 17px; color: var(--helper); margin-top: 6px; }
+.gnode small i { width: 11px; height: 11px; border-radius: 50%; background: #cbd5e1; display: inline-block; }
+
+/* review */
+.bar { height: 14px; border-radius: 99px; background: var(--subtle); overflow: hidden; margin-top: 10px; }
+.bar div { height: 100%; background: var(--brand); border-radius: 99px; }
+.crit { display: grid; grid-template-columns: 1fr 60px; align-items: end; gap: 6px 16px; }
+.crit b { font-size: 24px; font-weight: 600; color: var(--ink); }
+.crit span { font-family: 'Roboto Mono'; font-size: 26px; color: var(--ink); text-align: right; }
+.quote { font-size: 22px; line-height: 1.45; color: var(--muted); border-left: 4px solid var(--brand); padding: 4px 0 4px 18px; margin-top: 12px; }
+.quote mark { background: #dbe6ff; color: var(--ink); border-radius: 4px; padding: 0 4px; }
+.btn { border-radius: 14px; padding: 18px 28px; font-size: 24px; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- S1 title -->
+<section class="scene" id="s1" style="display:flex;flex-direction:column;justify-content:center;align-items:flex-start;">
+  <div class="logo" id="s1logo"><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path id="s1check" d="m16 11 2 2 4-4" stroke-dasharray="10" stroke-dashoffset="10"/><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
+  <div class="kick" id="s1k" style="margin-top:56px">Talent Scout</div>
+  <div class="big" id="s1t" style="margin-top:20px">AI screening interviews.<br><span class="b">A person decides.</span></div>
+</section>
+
+<!-- S2 chat -->
+<section class="scene" id="s2">
+  <div class="kick">01 · The interview</div>
+  <div class="big" style="font-size:60px;margin-top:16px">Questions come from the job.</div>
+  <div class="card chat">
+    <div class="chead"><b>Senior Backend Engineer</b><span class="mono">topic 2 of 4 · 06:12</span></div>
+    <span class="topic">Query performance</span>
+    <div class="bub ai" id="q"><span class="dots" id="dots"><i></i><i></i><i></i></span><span id="qtext"></span></div>
+    <div class="bub me" id="a" style="opacity:0"><span id="atext"></span><span class="caret" id="caret"></span></div>
+    <div class="entry" id="entry" style="opacity:0"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#15803d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>typed in the conversation · 214 chars · 52s</div>
+    <div style="margin-top:auto;border:1.5px solid var(--line);border-radius:18px;padding:20px 22px;display:flex;justify-content:space-between;align-items:center;background:var(--canvas)"><span style="font-size:24px;color:var(--helper)">Type your answer…</span><span style="display:flex;gap:14px;align-items:center"><span class="mono" style="font-size:18px;color:var(--helper)">0 / 2000</span><span style="width:52px;height:52px;border-radius:14px;background:var(--brand);display:grid;place-items:center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span></span></div>
+  </div>
+</section>
+
+<!-- S3 graph -->
+<section class="scene" id="s3">
+  <div class="kick">02 · The AI graph</div>
+  <div class="big" style="font-size:60px;margin-top:16px">Five model calls.<br>Every check is code.</div>
+  <div class="card" style="position:absolute;left:80px;right:80px;top:390px;height:820px;background:var(--wash);border-color:#dbe4fb">
+    <svg id="edges" width="920" height="860" style="position:absolute;inset:0" fill="none" stroke-width="3" stroke-linecap="round"></svg>
+    <div id="nodes"></div>
+    <div id="retry" class="mono" style="position:absolute;left:186px;top:540px;font-size:18px;color:var(--warning-text);opacity:0">quote not found · retry 2/3</div>
+    <div class="mono" id="cost" style="position:absolute;right:30px;bottom:26px;font-size:20px;color:var(--muted)"></div>
+  </div>
+</section>
+
+<!-- S4 review -->
+<section class="scene" id="s4">
+  <div class="kick">03 · The recruiter</div>
+  <div class="big" style="font-size:60px;margin-top:16px">Scores backed by quotes.</div>
+  <div class="card" id="r1" style="margin-top:40px;padding:34px;display:grid;gap:26px">
+    <div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:30px;font-weight:600;color:var(--ink)">Ayu Prameswari</div><div style="font-size:20px;color:var(--helper);margin-top:4px">Senior Backend Engineer · interview done</div></div><div style="text-align:right"><div class="mono" style="font-size:18px;color:var(--helper)">overall</div><div id="overall" style="font-size:56px;font-weight:600;color:var(--ink);letter-spacing:-.03em">0.0</div></div></div>
+    <div id="crits" style="display:grid;gap:22px"></div>
+    <div class="quote" id="quote">“Our candidate search took 2.4 s. EXPLAIN showed a sequential scan, so I <mark>added a composite index on (job_id, status)</mark> and it dropped to 40 ms.”</div>
+  </div>
+  <div class="card" id="r2" style="margin-top:20px;padding:26px 30px;display:flex;gap:20px;align-items:center;border:2px solid var(--success)">
+    <div style="width:52px;height:52px;border-radius:14px;background:#e9f9ec;display:grid;place-items:center;flex:none"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#15803d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg></div>
+    <div><div style="font-size:24px;font-weight:600;color:var(--ink)">Authenticity: no concern</div><div style="font-size:20px;color:var(--muted);margin-top:4px">Answers were typed in the conversation. Advisory only, never changes a score.</div></div>
+  </div>
+  <div id="r3" style="margin-top:28px;display:flex;gap:16px">
+    <div class="btn" id="shortlist" style="background:var(--brand);color:#fff">Shortlist</div>
+    <div class="btn" style="background:#fff;border:1px solid var(--line);color:var(--muted)">Reject</div>
+  </div>
+</section>
+
+<!-- S5 end -->
+<section class="scene" id="s5" style="display:flex;flex-direction:column;justify-content:center">
+  <div class="big" style="font-size:86px">
+    <div id="e1">AI does the work.</div>
+    <div id="e2" style="color:var(--success-text)">Code checks it.</div>
+    <div id="e3" style="color:var(--brand)">A person decides.</div>
+  </div>
+  <div id="e4" style="margin-top:70px;display:flex;align-items:center;gap:20px">
+    <div class="logo" style="width:72px;height:72px;box-shadow:none"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m16 11 2 2 4-4"/><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
+    <div><div style="font-size:34px;font-weight:600;color:var(--ink)">Talent Scout</div><div style="font-size:22px;color:var(--muted);margin-top:4px">Built by AI agents. Merged by humans.</div></div>
+  </div>
+</section>
+
+<script>
+const FPS = 30, DURATION = 24;
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const ease = (x) => { x = clamp(x); return x < .5 ? 4*x*x*x : 1 - Math.pow(-2*x + 2, 3) / 2; };
+const out = (x) => 1 - Math.pow(1 - clamp(x), 3);
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const $ = (id) => document.getElementById(id);
+// scene windows [in, out]
+const W = { s1: [0, 3.2], s2: [3.0, 9.2], s3: [9.0, 15.4], s4: [15.2, 20.6], s5: [20.4, 24.5] };
+function sceneOpacity(t, [a, b]) { return Math.min(out(prog(t, a, a + .45)), 1 - ease(prog(t, b - .45, b))); }
+function rise(el, p, dist = 40) { el.style.opacity = out(p); el.style.transform = `translateY(${(1 - out(p)) * dist}px)`; }
+
+const Q = 'You mentioned speeding up candidate search. Walk me through the slowest query you fixed: what did the query plan show?';
+const A = 'Our candidate search took 2.4 s. EXPLAIN showed a sequential scan, so I added a composite index on (job_id, status) and it dropped to 40 ms.';
+
+// graph layout
+const N = [
+  ['planner','Planner','LLM',40,40],['plan_check','Plan check','code',340,40],
+  ['interviewer','Interviewer','LLM',40,230],['judge','Judge','LLM',340,230],['guard','Guard','code',640,230],
+  ['evidence','Evidence check','code',40,420],['scorer','Scorer','LLM',340,420],
+  ['auth','Authenticity','LLM',40,610],['gate','Recruiter gate','human',340,610],
+];
+const E = [
+  ['planner','plan_check','M280 86 H340'],['plan_check','interviewer','M460 132 V181 H160 V230'],
+  ['interviewer','judge','M280 276 H340'],['judge','guard','M580 276 H640'],
+  ['guard','scorer','M760 322 V466 H580'],['scorer','evidence','M340 466 H280'],
+  ['evidence','auth','M160 512 V610'],['auth','gate','M280 656 H340'],
+];
+// timeline (seconds after scene start 9.0): node start/end
+const T0 = 9.6, step = 0.52;
+const order = ['planner','plan_check','interviewer','judge','guard','scorer','evidence','scorer2','evidence2','auth','gate'];
+const nodes = {}; const edgeEls = [];
+function build() {
+  const host = $('nodes'), svg = $('edges');
+  for (const [id, name, kind, x, y] of N) {
+    const d = document.createElement('div'); d.className = 'gnode'; d.style.left = x + 'px'; d.style.top = y + 'px';
+    d.innerHTML = `<b>${name}</b><small><i></i><span>${kind} · idle</span></small>`;
+    host.appendChild(d); nodes[id] = { el: d, kind, dot: d.querySelector('i'), lab: d.querySelector('span') };
+  }
+  for (const [a, b, path] of E) {
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', path); p.setAttribute('stroke', '#cbd5e1'); svg.appendChild(p);
+    const len = p.getTotalLength(); const q = p.cloneNode(); q.setAttribute('stroke', '#145aff');
+    q.style.strokeDasharray = len; q.style.strokeDashoffset = len; svg.appendChild(q);
+    edgeEls.push({ a, b, q, len });
+  }
+  const loop = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  loop.setAttribute('d', 'M40 466 C6 466 6 392 40 392 H460 V420'); loop.setAttribute('stroke', '#ffa64d'); loop.setAttribute('stroke-dasharray', '9 8'); loop.id = 'loop'; loop.style.opacity = 0; svg.appendChild(loop);
+  const crits = [['Backend depth', 4], ['System design', 4], ['Reliability and operations', 3], ['Communication', 5]];
+  $('crits').innerHTML = crits.map(([n, s], i) => `<div class="crit"><b>${n}</b><span id="cs${i}">–</span><div class="bar" style="grid-column:1/3"><div id="cb${i}" style="width:0%"></div></div></div>`).join('');
+  window.CRITS = crits;
+}
+function nodeState(id, t) {
+  // returns idle|running|passed|retry
+  const runs = order.map((o, i) => [o.replace(/2$/, ''), T0 + i * step]).filter(([o]) => o === id);
+  let st = 'idle';
+  for (const [, s] of runs) { if (t >= s) st = 'running'; if (t >= s + step * .92) st = 'passed'; }
+  if (id === 'evidence' && t >= T0 + 6 * step + step * .92 && t < T0 + 8 * step) st = 'failed';
+  if (id === 'gate' && t >= T0 + 10 * step) st = 'waiting';
+  return st;
+}
+function paintNode(id, st, t) {
+  const n = nodes[id]; const e = n.el;
+  const map = {
+    idle: ['#e2e8f0', '#fff', '#cbd5e1', `${n.kind} · idle`, '#6b7280', 'none'],
+    running: ['#145aff', '#f0f4fe', '#145aff', `${n.kind} · running`, '#145aff', `0 0 0 ${6 + 4*Math.sin(t*10)}px rgba(20,90,255,.15)`],
+    passed: ['#16ca2e', '#effbf1', '#16ca2e', `${n.kind} · passed`, '#15803d', 'none'],
+    failed: ['#ffa64d', '#fff6ec', '#ffa64d', `${n.kind} · retry`, '#b45309', 'none'],
+    waiting: ['#ffa64d', '#fff6ec', '#ffa64d', 'human · your call', '#b45309', `0 0 0 ${6 + 4*Math.sin(t*6)}px rgba(255,166,77,.2)`],
+  }[st];
+  e.style.borderColor = map[0]; e.style.background = map[1]; n.dot.style.background = map[2]; n.lab.textContent = map[3]; n.lab.style.color = map[4]; e.style.boxShadow = map[5];
+}
+window.render = function (t) {
+  for (const k in W) $(k).style.opacity = sceneOpacity(t, W[k]);
+  // S1
+  const p1 = prog(t, .2, 1.1); $('s1logo').style.transform = `scale(${.6 + .4*out(p1)})`; $('s1logo').style.opacity = out(p1);
+  $('s1check').style.strokeDashoffset = 10 * (1 - ease(prog(t, 1.0, 1.6)));
+  rise($('s1k'), prog(t, .6, 1.3)); rise($('s1t'), prog(t, .8, 1.7), 50);
+  // S2
+  const qt = prog(t, 4.6, 6.6); const typing = t >= 3.4 && t < 4.6;
+  $('dots').style.display = typing ? 'inline-flex' : 'none';
+  [...$('dots').children].forEach((d, i) => d.style.transform = `translateY(${-6 * Math.max(0, Math.sin(t*9 - i*.8))}px)`);
+  $('qtext').textContent = Q.split(' ').slice(0, Math.ceil(qt * Q.split(' ').length)).join(' ');
+  const at = prog(t, 6.9, 8.5); $('a').style.opacity = t > 6.8 ? 1 : 0;
+  $('atext').textContent = A.slice(0, Math.round(at * A.length)) || '​';
+  $('caret').style.opacity = at < 1 && Math.floor(t * 3) % 2 === 0 ? 1 : (at < 1 ? .2 : 0);
+  rise($('entry'), prog(t, 8.5, 8.9), 12);
+  // S3
+  for (const [id] of N) paintNode(id, nodeState(id, t), t);
+  for (const ed of edgeEls) {
+    const ia = order.lastIndexOf(ed.a) >= 0 ? order.indexOf(ed.a) : 0;
+    let start = T0 + order.indexOf(ed.a) * step + step * .8;
+    if (ed.a === 'scorer') start = T0 + 5 * step + step * .8;
+    if (ed.a === 'evidence') start = T0 + 8 * step + step * .8;
+    ed.q.style.strokeDashoffset = ed.len * (1 - ease(prog(t, start, start + step * .5)));
+  }
+  const lp = prog(t, T0 + 6.8 * step, T0 + 7.3 * step); $('loop').style.opacity = t < T0 + 9 * step ? out(lp) : 1 - prog(t, T0 + 9*step, T0 + 9.6*step);
+  $('retry').style.opacity = $('loop').style.opacity;
+  const c = 0.0121 * ease(prog(t, T0, T0 + 10 * step)); $('cost').textContent = `cost $${c.toFixed(4)} · 34 calls`;
+  // S4
+  rise($('r1'), prog(t, 15.4, 16.0), 40);
+  CRITS.forEach(([, s], i) => { const p = ease(prog(t, 15.9 + i * .22, 16.7 + i * .22)); $('cb' + i).style.width = (p * s * 20) + '%'; $('cs' + i).textContent = p > .05 ? (p*s).toFixed(0) + '/5' : '–'; });
+  const ov = 4.0 * ease(prog(t, 16, 17.4)); $('overall').textContent = ov.toFixed(1);
+  const mk = document.querySelector('#quote mark'); mk.style.background = `rgba(20,90,255,${.18 * out(prog(t, 17.4, 17.9))})`;
+  rise($('quote'), prog(t, 17.0, 17.5), 16);
+  rise($('r2'), prog(t, 17.9, 18.4), 24);
+  rise($('r3'), prog(t, 18.5, 18.9), 16);
+  const press = prog(t, 19.4, 19.7); $('shortlist').style.transform = `scale(${1 - .06 * Math.sin(press * Math.PI)})`;
+  $('shortlist').textContent = t > 19.7 ? '✓ Shortlisted' : 'Shortlist';
+  // S5
+  rise($('e1'), prog(t, 20.7, 21.2)); rise($('e2'), prog(t, 21.2, 21.7)); rise($('e3'), prog(t, 21.7, 22.2)); rise($('e4'), prog(t, 22.4, 22.9), 20);
+};
+window.FPS = FPS; window.DURATION = DURATION;
+build();
+const q = new URLSearchParams(location.search);
+if (q.has('t')) render(parseFloat(q.get('t')));
+else { const st = performance.now(); (function loop() { render(((performance.now() - st) / 1000) % DURATION); requestAnimationFrame(loop); })(); }
+</script>
+</body>
+</html>
