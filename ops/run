@@ -22,8 +22,9 @@ import importlib.machinery
 import importlib.util
 
 from checks import feedback, gate, saw_key
-from lib import (AGENTS, HANDOFF_DIR, HANDOFF_MARK, OPS, REPOS, ROOT, STATE, STOP_FILE, analyze, config,
-                 gh, handoff_path, load_nodes, load_state, parse_handoff, save_state, sh, state_path)
+from lib import (AGENT_LOGIN_KEEP, AGENTS, HANDOFF_DIR, HANDOFF_MARK, OPS, PROXY_ENV_KEEP, REPOS, ROOT, STATE,
+                 STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, check_env, config, gh, handoff_path, load_nodes,
+                 load_state, parse_handoff, save_state, sh, state_path)
 
 _loader = importlib.machinery.SourceFileLoader("brief", str(OPS / "brief"))
 _spec = importlib.util.spec_from_loader("brief", _loader)
@@ -42,43 +43,8 @@ CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm:*)", "Bash(g
 # It cannot push, open PRs or merge; ops/run does those with the human's gh. See WORKFLOW.md.
 AGENT_GH_TOKEN = OPS / "env" / "agent.gh-token"
 # Agents run code they write (go test, pnpm scripts), so every variable passed here reaches that
-# code too. Anything not listed is dropped: database URLs, API keys, the human's tokens and sockets.
-AGENT_ENV_KEEP = {
-    "PATH": "finds go, pnpm, node, git, gh and the agent CLIs",
-    "HOME": "the agent CLIs keep their own login and config under it",
-    "USER": "some tools look up the current user",
-    "LOGNAME": "same as USER",
-    "SHELL": "OpenCode's bash tool starts this shell",
-    "LANG": "text encoding",
-    "LC_ALL": "text encoding, when set",
-    "TERM": "terminal type for CLI output",
-    "TZ": "time zone, when set",
-    "TMPDIR": "temp files, when set",
-    "XDG_CONFIG_HOME": "OpenCode config, when moved out of HOME",
-    "XDG_DATA_HOME": "OpenCode login, when moved out of HOME",
-    "XDG_CACHE_HOME": "tool caches, when moved out of HOME",
-    "XDG_STATE_HOME": "tool state, when moved out of HOME",
-    "GOPATH": "Go workspace",
-    "GOMODCACHE": "Go module cache, which agents may read",
-    "GOCACHE": "Go build cache",
-    "GOROOT": "Go install, when not on the default path",
-    "GOFLAGS": "Go flags, when set",
-    "GOTOOLCHAIN": "Go toolchain choice",
-    "GOPROXY": "Go module proxy",
-    "PNPM_HOME": "pnpm install and store",
-    "COREPACK_HOME": "corepack, which provides pnpm",
-    "COREPACK_ENABLE_AUTO_PIN": "keeps corepack from editing package.json",
-    "NVM_DIR": "node from nvm, when used",
-    "CLAUDE_CONFIG_DIR": "Claude CLI login, when moved out of HOME",
-    "ANTHROPIC_API_KEY": "Claude CLI login, when it uses an API key instead of a stored login",
-    "CLAUDE_CODE_OAUTH_TOKEN": "Claude CLI login, when it uses a long-lived token",
-    "HTTP_PROXY": "egress proxy (sandbox stage 1)",
-    "HTTPS_PROXY": "egress proxy (sandbox stage 1)",
-    "NO_PROXY": "egress proxy (sandbox stage 1)",
-    "http_proxy": "egress proxy (sandbox stage 1)",
-    "https_proxy": "egress proxy (sandbox stage 1)",
-    "no_proxy": "egress proxy (sandbox stage 1)",
-}
+# code too. The lists live in lib.py, shared with the gate's checks; agents add only their CLI login.
+AGENT_ENV_KEEP = {**TOOLCHAIN_ENV_KEEP, **AGENT_LOGIN_KEEP, **PROXY_ENV_KEEP}
 # Set by ops/run itself, never copied from the parent.
 AGENT_ENV_SET = {"PWD", "OPENCODE_CONFIG_CONTENT", "GH_TOKEN", "GH_CONFIG_DIR", "GH_PROMPT_DISABLED",
                  "GIT_TERMINAL_PROMPT", "GIT_CONFIG_COUNT"}
@@ -237,11 +203,13 @@ def prepare(node):
         slug = re.sub(r"[^a-z0-9]+", "-", node.title.lower())[:30].strip("-")
         sh(["git", "worktree", "add", "-q", str(wt), "-b", f"node/{node.number}-{slug}",
             "--no-track", "origin/main"], cwd=checkout)
-        agent_env = OPS / "env" / f"{node.repo}.env.agent"
-        if agent_env.exists():
-            shutil.copy2(agent_env, wt / ".env")
         if node.repo == "client":
-            sh(["pnpm", "install", "--frozen-lockfile"], cwd=wt, timeout=600)
+            # The client build reads its local, non-production values from .env. Nothing the server agent
+            # runs reads .env (config and the live tests use the process env), so its secrets stay out.
+            agent_env = OPS / "env" / "client.env.agent"
+            if agent_env.exists():
+                shutil.copy2(agent_env, wt / ".env")
+            sh(["pnpm", "install", "--frozen-lockfile"], cwd=wt, timeout=600, env=check_env())
     return wt
 
 

@@ -25,9 +25,54 @@ HANDOFF_MARK = "<!-- handoff -->"
 CONTRACT_FILES = ["docs/API.md", "docs/EVENTS.md", "docs/PRD.md"]
 
 
-def sh(cmd, cwd=None, timeout=None, check=True):
+# Code from a worktree (agents, green and red checks, dependency installs) only ever sees these
+# variables. Anything not listed is dropped: database URLs, API keys, the human's tokens and sockets.
+TOOLCHAIN_ENV_KEEP = {
+    "PATH": "finds go, pnpm, node, git, gh and the agent CLIs",
+    "HOME": "the agent CLIs keep their own login and config under it",
+    "USER": "some tools look up the current user",
+    "LOGNAME": "same as USER",
+    "SHELL": "OpenCode's bash tool starts this shell",
+    "LANG": "text encoding",
+    "LC_ALL": "text encoding, when set",
+    "TERM": "terminal type for CLI output",
+    "TZ": "time zone, when set",
+    "TMPDIR": "temp files, when set",
+    "XDG_CONFIG_HOME": "OpenCode config, when moved out of HOME",
+    "XDG_DATA_HOME": "OpenCode login, when moved out of HOME",
+    "XDG_CACHE_HOME": "tool caches, when moved out of HOME",
+    "XDG_STATE_HOME": "tool state, when moved out of HOME",
+    "GOPATH": "Go workspace",
+    "GOMODCACHE": "Go module cache, which agents may read",
+    "GOCACHE": "Go build cache",
+    "GOROOT": "Go install, when not on the default path",
+    "GOFLAGS": "Go flags, when set",
+    "GOTOOLCHAIN": "Go toolchain choice",
+    "GOPROXY": "Go module proxy",
+    "PNPM_HOME": "pnpm install and store",
+    "COREPACK_HOME": "corepack, which provides pnpm",
+    "COREPACK_ENABLE_AUTO_PIN": "keeps corepack from editing package.json",
+    "NVM_DIR": "node from nvm, when used",
+}
+# Only the agent CLIs need these; checks and installs never do.
+AGENT_LOGIN_KEEP = {
+    "CLAUDE_CONFIG_DIR": "Claude CLI login, when moved out of HOME",
+    "ANTHROPIC_API_KEY": "Claude CLI login, when it uses an API key instead of a stored login",
+    "CLAUDE_CODE_OAUTH_TOKEN": "Claude CLI login, when it uses a long-lived token",
+}
+PROXY_ENV_KEEP = {name: "egress proxy (sandbox stage 3)" for name in
+                  ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy")}
+CHECK_ENV_KEEP = {**TOOLCHAIN_ENV_KEEP, **PROXY_ENV_KEEP}
+
+
+def check_env():
+    """The environment for commands that run code from a worktree: toolchain only, no logins or secrets."""
+    return {k: os.environ[k] for k in CHECK_ENV_KEEP if k in os.environ}
+
+
+def sh(cmd, cwd=None, timeout=None, check=True, env=None):
     done = subprocess.run(cmd, cwd=cwd, shell=isinstance(cmd, str), text=True,
-                          capture_output=True, timeout=timeout)
+                          capture_output=True, timeout=timeout, env=env)
     if check and done.returncode:
         raise RuntimeError(f"{cmd}: {done.stderr.strip()[-500:]}")
     return done

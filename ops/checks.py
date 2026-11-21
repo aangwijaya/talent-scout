@@ -5,7 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from lib import CONTRACT_FILES, GREEN, HANDOFF_FIELDS, matches, parse_handoff, sh, tier_of
+from lib import CONTRACT_FILES, GREEN, HANDOFF_FIELDS, check_env, matches, parse_handoff, sh, tier_of
 
 SECRET = re.compile(r"sk-or-[A-Za-z0-9-]{10,}|sb_secret_[A-Za-z0-9_-]{10,}|GOCSPX-[A-Za-z0-9_-]{10,}"
                     r"|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|postgres(ql)?://[^<\s:]+:[^<\s@]+@")
@@ -70,7 +70,7 @@ def check_handoff(text):
 
 def run_commands(commands, wt, name):
     for command in commands:
-        done = sh(command, cwd=wt, check=False, timeout=1200)
+        done = sh(command, cwd=wt, check=False, timeout=1200, env=check_env())
         if done.returncode:
             tail = (done.stdout + done.stderr).strip()[-1500:]
             return [fail(name, f"`{command}` exits 0", tail)]
@@ -98,7 +98,7 @@ def check_red(wt, base, files, block, cfg):
             shutil.copy2(Path(wt) / test, target)
         if (Path(wt) / "node_modules").exists():
             (tmp / "node_modules").symlink_to(Path(wt).resolve() / "node_modules")
-        if all(sh(c, cwd=tmp, check=False, timeout=600).returncode == 0 for c in commands):
+        if all(sh(c, cwd=tmp, check=False, timeout=600, env=check_env()).returncode == 0 for c in commands):
             return [fail("red", "new tests fail on the base commit", "they pass without the change")]
         return []
     finally:
