@@ -151,7 +151,9 @@ def podman_argv(repo, cfg, cwd, command, env_file, mounts=(), read_only=False, n
             f"--cpus={cfg.get('sandbox_cpus', 4)}", f"--memory={cfg.get('sandbox_memory', '6g')}",
             f"--pids-limit={cfg.get('sandbox_pids', 1024)}", "--cap-drop=all", "--security-opt=no-new-privileges",
             "--tmpfs", f"{HOME}:rw,exec,mode=1777", "--tmpfs", "/tmp:rw,exec,mode=1777",
-            f"--network={NETWORK}", "--env-file", str(env_file), "-w", str(cwd), "-v", f"{cwd}:{cwd}:{'ro' if read_only else 'rw'}"]
+            f"--network={NETWORK}", "--env-file", str(env_file), "-w", str(cwd), "-v", f"{cwd}:{cwd}:{'O' if read_only else 'rw'}"]
+    # A reviewer gets an overlay, not ro: OpenCode writes .opencode/ in its project dir at start and dies
+    # on a read-only mount (pilot client#88). The overlay discards every write, so the clone stays as is.
     if name:
         argv += ["--name", name]
     for source, opt in mounts:  # (path, option) mounts at the same path; (full spec, None) as given
