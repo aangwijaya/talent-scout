@@ -169,7 +169,8 @@ class Gate(unittest.TestCase):
 
     def run_gate(self, block=RED_BLOCK, labels=(), handoff=GOOD_HANDOFF, repo="server"):
         n = node(1, repo=repo, labels=labels, block=block)
-        return checks.gate(n, self.wt, lib.config(), handoff, run_green=False)
+        # These tests are about the gate itself; the host mode keeps them independent of Podman.
+        return checks.gate(n, self.wt, {**lib.config(), "sandbox": "host"}, handoff, run_green=False)
 
     def failed(self, result):
         return {f["check"] for f in result["failures"]}
@@ -693,6 +694,7 @@ class CheckEnv(Gate):
                     Path(cmd[4]).mkdir(parents=True)
                 return subprocess.CompletedProcess(cmd, 0, "", "")
             run.sh, run.ROOT, run.OPS = fake_sh, Path(root), Path(root, "ops")
+            run.config = lambda: {**lib.config(), "sandbox": "host"}
             run.prepare(node(7, repo="client"))
         install = [env for cmd, env in calls if cmd[:2] == ["pnpm", "install"]]
         self.assertEqual(len(install), 1)
@@ -711,6 +713,7 @@ class CheckEnv(Gate):
                     Path(cmd[4]).mkdir(parents=True)
                 return subprocess.CompletedProcess(cmd, 0, "", "")
             run.sh, run.ROOT, run.OPS = fake_sh, Path(root), Path(root, "ops")
+            run.config = lambda: {**lib.config(), "sandbox": "host"}
             Path(root, "ops", "env").mkdir(parents=True)
             for repo in ("client", "server"):
                 Path(root, "ops", "env", f"{repo}.env.agent").write_text("SECRET=1\n")

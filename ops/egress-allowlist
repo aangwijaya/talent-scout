@@ -2,6 +2,7 @@
 # Adding a host is a reviewed change to this file; a refusal shows up in the node's egress log.
 api.anthropic.com
 opencode.ai
+models.opencode.ai
 api.github.com
 github.com
 proxy.golang.org
