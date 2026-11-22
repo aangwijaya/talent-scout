@@ -121,6 +121,15 @@ Stages, each its own PR to this repo:
 4. Agent clone, with commits fetched into the human's repository with hooks disabled.
 5. Pilot on two nodes per repo, then remove host mode.
 
+Stages 1–4 are merged. **Pilot (stage 5):** `sandbox: container` is on. The pilot nodes are client#12, client#88, server#92 and server#93. Before the first node of a session, `ops/run` runs `--check-sandbox` and stops if any wall fails.
+
+What the pilot needs:
+- the images, built with `ops/sandbox build`;
+- the Claude token in `ops/env/claude.oauth-token` (from `claude setup-token`, mode 600);
+- a spend cap on the OpenCode key.
+
+To go back, set `sandbox: host`. Host mode is removed when the four exit criteria in ADR 0002 hold.
+
 Once stage 5 lands, this section will say what an agent can and cannot do, how to build images, and how to add an allowlisted host.
 
 ## Agent GitHub token
