@@ -21,6 +21,7 @@ DROP = {"PATH", "HOME", "GOPATH", "GOCACHE", "GOROOT", "GOTOOLCHAIN", "PNPM_HOME
         "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "TMPDIR", "SHELL",
         "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "GH_CONFIG_DIR"}
 CLAUDE_TOKEN = OPS / "env" / "claude.oauth-token"
+GO_BUILD_CACHE = OPS / ".cache" / "sandbox" / "go-build"  # filled only from main, by `ops/sandbox warm`
 
 
 class SandboxError(Exception):
@@ -53,6 +54,28 @@ def build(repo):
                     str(IMAGES)], check=True)
 
 
+def warm(repo, cfg):
+    """Fill the sandbox build cache by compiling main, which a human merged, never agent code (ADR 0005)."""
+    if repo != "server":
+        return
+    require_image(repo)
+    checkout = ROOT / "talent-scout-server"
+    GO_BUILD_CACHE.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout, check=True)
+    with tempfile.TemporaryDirectory(prefix="warm-") as tmp:
+        tree = Path(tmp, "tree")
+        subprocess.run(["git", "worktree", "add", "--detach", "-q", str(tree), "origin/main"], cwd=checkout, check=True)
+        try:
+            modcache = subprocess.run(["go", "env", "GOMODCACHE"], capture_output=True, text=True).stdout.strip()
+            env = {**container_env(check_env()), "GOCACHE": str(GO_BUILD_CACHE), "GOMODCACHE": modcache}
+            with env_file(env) as path:
+                argv = podman_argv(repo, cfg, tree, ["sh", "-c", "go build ./... && go vet ./... && go test -count=1 -run '^$' ./..."],
+                                   path, mounts=[(str(GO_BUILD_CACHE), "rw"), (modcache, "rw")])
+                subprocess.run(argv, check=True)
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=checkout)
+
+
 def container_env(env):
     """The host env translated for the image: host paths and host logins dropped, caches in /tmp."""
     out = {k: v for k, v in env.items() if k not in DROP}
@@ -66,18 +89,34 @@ def container_env(env):
     return out
 
 
-def cache_mounts(repo):
-    """Warm caches (ADR 0005), mounted as overlays: readable, and writes are discarded with the run."""
-    mounts = []
+def warm_caches(repo):
+    """Warm caches (ADR 0005) as (env name, value, mount path). The tool must be pointed at the mount,
+    or it falls back to an empty cache under HOME and downloads everything on every run."""
     if repo == "server":
+        out = []
         modcache = subprocess.run(["go", "env", "GOMODCACHE"], capture_output=True, text=True).stdout.strip()
         if modcache and Path(modcache).is_dir():
-            mounts.append((modcache, "O"))
-    else:
-        store = subprocess.run(["pnpm", "store", "path"], capture_output=True, text=True).stdout.strip()
-        if store and Path(store).is_dir():
-            mounts.append((store, "O"))
-    return mounts
+            out.append(("GOMODCACHE", modcache, modcache))
+        # The host's build cache is keyed to the host's Go install, so the image's Go misses all of it.
+        # `ops/sandbox warm` fills this one with the image's Go from main; a cold build is ~10x slower.
+        if GO_BUILD_CACHE.is_dir():
+            out.append(("GOCACHE", str(GO_BUILD_CACHE), str(GO_BUILD_CACHE)))
+        return out
+    store = subprocess.run(["pnpm", "store", "path"], capture_output=True, text=True).stdout.strip()
+    if not store or not Path(store).is_dir():
+        return []
+    # `pnpm store path` names the versioned dir (.../store/v11); store-dir is its parent.
+    root = str(Path(store).parent) if Path(store).name.startswith("v") else store
+    return [("npm_config_store_dir", root, root)]
+
+
+def cache_mounts(repo):
+    """Mounted as overlays: readable, and writes are discarded with the run."""
+    return [(path, "O") for _, _, path in warm_caches(repo)]
+
+
+def cache_env(repo):
+    return {name: value for name, value, _ in warm_caches(repo)}
 
 
 def git_common_dir(path):
@@ -121,7 +160,7 @@ def run_code(command, cwd, repo, cfg, timeout=None, extra_mounts=()):
     if common and not Path(common).is_relative_to(Path(cwd)):
         mounts.append((common, "ro"))
     name = f"ts-check-{uuid.uuid4().hex[:10]}"
-    with env_file(container_env(check_env())) as path:
+    with env_file({**container_env(check_env()), **cache_env(repo)}) as path:
         argv = podman_argv(repo, cfg, cwd, ["sh", "-c", command], path, mounts=mounts, name=name)
         try:
             return subprocess.run(argv, text=True, capture_output=True, timeout=timeout)
@@ -167,7 +206,8 @@ def probe(repo, cfg):
                                                          "PATH", "LANG", "COREPACK_ENABLE_AUTO_PIN",
                                                          "COREPACK_HOME", "NODE_VERSION", "YARN_VERSION",
                                                          "GOTOOLCHAIN", "GOPROXY", "GOFLAGS",
-                                                         "PLAYWRIGHT_BROWSERS_PATH", "OLDPWD"})
+                                                         "PLAYWRIGHT_BROWSERS_PATH", "OLDPWD",
+                                                         "GOMODCACHE", "GOCACHE", "npm_config_store_dir"})
     memory = str(parse_bytes(cfg.get("sandbox_memory", "6g")))
     with tempfile.TemporaryDirectory() as cwd, env_file(container_env(check_env())) as path:
         argv = podman_argv(repo, cfg, cwd, ["sh", "/opt/probe/probe.sh", str(Path.home()), str(ROOT), memory,

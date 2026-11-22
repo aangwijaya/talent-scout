@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Sandbox images (ADR 0003). Usage: ops/sandbox build [client|server]   ops/sandbox tags"""
+"""Sandbox images (ADR 0003). Usage: ops/sandbox build|warm|tags [client|server]
+
+build: build the images, then warm their caches. warm: compile main into the sandbox build cache.
+"""
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import container
-from lib import REPOS
+from lib import REPOS, config
 
 args = sys.argv[1:]
-if not args or args[0] not in ("build", "tags"):
+if not args or args[0] not in ("build", "warm", "tags"):
     sys.exit(__doc__)
 repos = args[1:] or list(REPOS)
 for repo in repos:
     if args[0] == "build":
         container.build(repo)
+    if args[0] in ("build", "warm"):
+        container.warm(repo, {**config(), "sandbox": "container"})
     print(container.image_tag(repo))
