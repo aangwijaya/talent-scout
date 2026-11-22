@@ -29,6 +29,7 @@ PROXY_NAME = "ts-egress"
 PROXY_URL = f"http://{PROXY_NAME}:8888"
 ALLOWLIST = OPS / "egress-allowlist"
 EGRESS_DIR = STATE / "egress"
+CLONES = STATE / "clones"  # agent clones (ADR 0004): the only repositories a sandbox ever sees
 GO_BUILD_CACHE = OPS / ".cache" / "sandbox" / "go-build"  # filled only from main, by `ops/sandbox warm`
 
 
@@ -94,6 +95,9 @@ def container_env(env):
     for name in ("NO_PROXY", "no_proxy"):
         out[name] = "localhost,127.0.0.1,::1"  # Playwright's local servers stay local
     out["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"  # telemetry would only add refusals
+    # Checks run in the human's worktree without its .git (never mounted), so Go must not stamp VCS info.
+    # Not -trimpath: server tests find their fixtures through source paths (runtime.Caller).
+    out["GOFLAGS"] = "-modcacherw -buildvcs=false"
     if "GOPROXY" in out:
         out["GOPROXY"] = "https://proxy.golang.org"  # no `direct`: modules come through the proxy only
     for key, git_key in (("NAME", "user.name"), ("EMAIL", "user.email")):
@@ -237,10 +241,8 @@ def run_code(command, cwd, repo, cfg, timeout=None, extra_mounts=()):
     """Run a shell command from a worktree inside the sandbox, with the check env (no logins)."""
     require_image(repo)
     ensure_egress(cfg)
+    # The worktree's .git file points at the human's repository, which is never mounted (ADR 0004).
     mounts = list(cache_mounts(repo)) + list(extra_mounts)
-    common = git_common_dir(cwd)
-    if common and not Path(common).is_relative_to(Path(cwd)):
-        mounts.append((common, "ro"))
     name = f"ts-check-{uuid.uuid4().hex[:10]}"
     with env_file({**container_env(check_env()), **cache_env(repo)}) as path:
         argv = podman_argv(repo, cfg, cwd, ["sh", "-c", command], path, mounts=mounts, name=name)
@@ -251,16 +253,51 @@ def run_code(command, cwd, repo, cfg, timeout=None, extra_mounts=()):
             raise
 
 
-def agent_mounts(wt, read_only, handoff_dir, opencode_home):
+def agent_mounts(clone, read_only, handoff_dir, opencode_home):
+    """The clone itself is mounted as the working directory; it carries its own .git."""
     mounts = [(str(handoff_dir), "rw")]
-    common = git_common_dir(wt)
-    if common:
-        mounts.append((common, "ro" if read_only else "rw"))  # stage 4 replaces this with an agent clone
     config = Path.home() / ".config" / "opencode"
     if config.is_dir():
         mounts.append((f"{config}:{HOME}/.config/opencode:O", None))
     mounts.append((f"{opencode_home}:{HOME}/.local/share/opencode:rw", None))
     return mounts
+
+
+def clone_path(wt):
+    return CLONES / Path(wt).name
+
+
+def _git(cwd, *args):
+    # Hooks are off for every host-side git call that touches an agent's work.
+    return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args], cwd=cwd, check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def ensure_clone(wt):
+    """The agent's own repository for this node: a standalone clone of the human's repository on the node
+    branch. The host makes it once, before any agent ran in it, and never runs git in it again."""
+    clone = clone_path(wt)
+    if (clone / ".git").is_dir():
+        return clone
+    branch = _git(wt, "branch", "--show-current")
+    source = Path(git_common_dir(wt)).parent
+    CLONES.mkdir(parents=True, exist_ok=True)
+    _git(CLONES, "clone", "-q", "--no-hardlinks", "--no-checkout", str(source), str(clone))
+    _git(clone, "fetch", "-q", str(source), "+refs/remotes/origin/main:refs/remotes/origin/main")
+    _git(clone, "checkout", "-q", "-B", branch, f"refs/remotes/origin/{branch}")
+    return clone
+
+
+def import_agent_commits(clone, wt, repo, cfg):
+    """Bring the agent's commits into the human's worktree as a bundle: data only, no config, no hooks.
+    The bundle is written inside the sandbox, so the host never runs git in the agent's clone."""
+    with tempfile.TemporaryDirectory(prefix="agent-bundle-") as out:
+        bundle = Path(out, "agent.bundle")
+        done = run_code(f"git bundle create {bundle} HEAD", str(clone), repo, cfg, extra_mounts=[(out, "rw")])
+        if done.returncode or not bundle.exists():
+            raise SandboxError(f"could not bundle the agent's commits: {(done.stdout + done.stderr).strip()[-300:]}")
+        _git(wt, "fetch", "-q", "--no-tags", str(bundle), "HEAD")
+        _git(wt, "reset", "-q", "--hard", "FETCH_HEAD")
 
 
 @contextmanager
