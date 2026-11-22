@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Sandbox images (ADR 0003). Usage: ops/sandbox build|warm|tags [client|server]
+"""Sandbox images (ADR 0003). Usage: ops/sandbox build|warm|tags [client|server|egress]
 
 build: build the images, then warm their caches. warm: compile main into the sandbox build cache.
+Every image is built before any warm, because warming runs in the sandbox and needs the egress proxy.
 """
 import sys
 
@@ -13,9 +14,12 @@ args = sys.argv[1:]
 if not args or args[0] not in ("build", "warm", "tags"):
     sys.exit(__doc__)
 repos = args[1:] or [*REPOS, "egress"]
-for repo in repos:
-    if args[0] == "build":
+if args[0] == "build":
+    for repo in repos:
         container.build(repo)
-    if args[0] in ("build", "warm") and repo in REPOS:
-        container.warm(repo, {**config(), "sandbox": "container"})
+if args[0] in ("build", "warm"):
+    for repo in repos:
+        if repo in REPOS:
+            container.warm(repo, {**config(), "sandbox": "container"})
+for repo in repos:
     print(container.image_tag(repo))
