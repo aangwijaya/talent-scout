@@ -16,7 +16,10 @@ RUN apt-get update \
 RUN curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
     | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_amd64/bin/gh"
 ENV COREPACK_ENABLE_AUTO_PIN=0 COREPACK_HOME=/opt/corepack LANG=C.UTF-8
-RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate && chmod -R a+rX /opt/corepack \
+# `pnpm --version` makes corepack fetch pnpm's native binary now: at run time /opt is read-only to the
+# non-root user, and a fetch then fails with EACCES.
+RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate && pnpm --version \
+ && chmod -R a+rX /opt/corepack \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "opencode-ai@${OPENCODE_VERSION}" \
  && npm cache clean --force
 # Runs as the host user through --userns=keep-id; HOME is a throwaway tmpfs per run.

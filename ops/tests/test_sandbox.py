@@ -143,6 +143,50 @@ class RunCode(unittest.TestCase):
 
 
 
+class WarmCache(unittest.TestCase):
+    """ADR 0005: the warm caches are mounted and the tools are pointed at them, or they are never used."""
+
+    def test_go_is_pointed_at_the_mounted_module_cache(self):
+        caches = container.warm_caches("server")
+        if not caches:
+            self.skipTest("no Go module cache on this host")
+        env = dict((name, value) for name, value, _ in caches)
+        mounts = [path for _, _, path in caches]
+        self.assertIn("GOMODCACHE", env)
+        self.assertTrue(any(env["GOMODCACHE"] == m or env["GOMODCACHE"].startswith(m + "/") for m in mounts))
+
+    def test_the_build_cache_is_the_sandbox_one_never_the_hosts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = container.GO_BUILD_CACHE
+            container.GO_BUILD_CACHE = Path(tmp, "go-build")
+            try:
+                self.assertNotIn("GOCACHE", container.cache_env("server"), "the host cache misses in the image")
+                container.GO_BUILD_CACHE.mkdir()
+                self.assertEqual(container.cache_env("server")["GOCACHE"], str(container.GO_BUILD_CACHE))
+            finally:
+                container.GO_BUILD_CACHE = saved
+
+    def test_pnpm_is_pointed_at_the_mounted_store(self):
+        caches = container.warm_caches("client")
+        if not caches:
+            self.skipTest("no pnpm store on this host")
+        env = dict((name, value) for name, value, _ in caches)
+        self.assertIn("npm_config_store_dir", env)
+        mount = caches[0][2]
+        self.assertTrue(env["npm_config_store_dir"] == mount)
+
+    def test_checks_run_with_the_cache_env(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        container.PODMAN, _ = fake_podman(tmp.name)
+        if not container.warm_caches("server"):
+            self.skipTest("no Go module cache on this host")
+        with tempfile.TemporaryDirectory() as wt:
+            lib.run_code(f"env > {wt}/env.txt", wt, "server", CFG)
+            env = dict(l.split("=", 1) for l in Path(wt, "env.txt").read_text().splitlines() if "=" in l)
+        self.assertEqual(env.get("GOMODCACHE"), dict((n, v) for n, v, _ in container.warm_caches("server"))["GOMODCACHE"])
+
+
 class AgentInBox(unittest.TestCase):
     """In container mode the agent CLI runs through podman with only the env file."""
 

@@ -164,7 +164,8 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
             if agent == "claude":
                 env["CLAUDE_CODE_OAUTH_TOKEN"] = container.claude_token()
             home = stack.enter_context(container.agent_home())
-            env_path = stack.enter_context(container.env_file(container.container_env(env)))
+            env_path = stack.enter_context(container.env_file({**container.container_env(env),
+                                                               **container.cache_env(repo)}))
             mounts = container.agent_mounts(wt, read_only, HANDOFF_DIR, home) + container.cache_mounts(repo)
             box_name = f"ts-{agent}-{Path(wt).name}-{int(time.time())}"
             cmd = container.podman_argv(repo, cfg, wt, cmd, env_path, mounts=mounts, read_only=read_only,
