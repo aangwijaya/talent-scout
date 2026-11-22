@@ -15,6 +15,9 @@ sys.path.insert(0, str(OPS))
 import container
 import lib
 
+# Tests never write the real proxy config or logs under ops/.state.
+container.EGRESS_DIR = Path(tempfile.mkdtemp(prefix="egress-test-"))
+
 CFG = {"sandbox": "container", "sandbox_cpus": 4, "sandbox_memory": "6g", "sandbox_pids": 1024}
 
 
@@ -254,12 +257,15 @@ class AgentInBox(unittest.TestCase):
         os.environ.update(PATH=f"{bin_dir}:{os.environ['PATH']}", OPENROUTER_API_KEY="sk-or-fake",
                           DATABASE_URL="postgres://u:p@h/db")
         self.run.STATE, self.run.HANDOFF_DIR = Path(self.tmp.name), Path(self.tmp.name, "handoff")
+        self.saved_egress_dir = container.EGRESS_DIR
+        container.EGRESS_DIR = Path(self.tmp.name, "egress")  # never the real ops/.state
         self.cfg = {**CFG, "timeout_min": 1, "budget_usd": 1, "opencode_model": "fake/model",
                     "claude_model": "m", "claude_effort": "low"}
 
     def tearDown(self):
         os.environ.clear()
         os.environ.update(self.saved)
+        container.EGRESS_DIR = self.saved_egress_dir
         self.tmp.cleanup()
 
     def wt(self):

@@ -191,22 +191,25 @@ def ensure_egress(cfg):
     EGRESS_DIR.mkdir(parents=True, exist_ok=True)
     (EGRESS_DIR / "filter").write_text("\n".join(filter_lines()) + "\n")
     (EGRESS_DIR / "tinyproxy.conf").write_text(tinyproxy_conf())
-    digest = hashlib.sha256((EGRESS_DIR / "filter").read_bytes() + tinyproxy_conf().encode()
+    digest = hashlib.sha256((EGRESS_DIR / "filter").read_bytes() + tinyproxy_conf().encode() + b"resolv-v1"
                             + image_tag("egress").encode()).hexdigest()[:12]
     if subprocess.run([PODMAN, "network", "exists", NETWORK], capture_output=True).returncode:
         subprocess.run([PODMAN, "network", "create", "--internal", NETWORK], capture_output=True, check=True)
     running = subprocess.run([PODMAN, "ps", "--filter", f"name=^{PROXY_NAME}$", "--format", "{{.Labels}}"],
                              capture_output=True, text=True).stdout
-    if f"ts.egress={digest}" in running:
+    if f"ts.egress:{digest}" in running:  # podman prints labels as map[key:value]
         return
     subprocess.run([PODMAN, "rm", "-f", "-t", "0", "--ignore", PROXY_NAME], capture_output=True)
-    # The proxy alone joins both networks. Its DNS is the host's resolver: the internal network's DNS
-    # resolves only container names, which is also why a sandbox cannot leak data through DNS.
+    # The proxy alone joins both networks. Its resolv.conf lists only the host's resolver: podman would
+    # put the internal network's DNS first, which answers "no such name" for outside hosts (and is why
+    # a sandbox cannot leak data through DNS), so lookups would stop there.
     nameserver = next((line.split()[1] for line in Path("/etc/resolv.conf").read_text().splitlines()
                        if line.startswith("nameserver")), "1.1.1.1")
+    (EGRESS_DIR / "resolv.conf").write_text(f"nameserver {nameserver}\n")
     done = subprocess.run([PODMAN, "run", "-d", "--rm", "--name", PROXY_NAME, "--label", f"ts.egress={digest}",
                            "--user", "65534:65534", "--cap-drop=all", "--security-opt=no-new-privileges",
-                           "--dns", nameserver, "--network", "podman", "--network", NETWORK,
+                           "--network", "podman", "--network", NETWORK,
+                           "-v", f"{EGRESS_DIR / 'resolv.conf'}:/etc/resolv.conf:ro",
                            "-v", f"{EGRESS_DIR / 'tinyproxy.conf'}:/etc/egress/tinyproxy.conf:ro",
                            "-v", f"{EGRESS_DIR / 'filter'}:/etc/egress/filter:ro",
                            image_tag("egress"), "tinyproxy", "-d", "-c", "/etc/egress/tinyproxy.conf"],
