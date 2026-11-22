@@ -32,13 +32,15 @@ case " $* " in *" run -d "*) exit 0 ;; esac
 if [ "$1" = "ps" ]; then exit 0; fi
 if [ "$1" = "logs" ]; then cat {tmp}/proxy.log 2>/dev/null; exit 0; fi
 if [ "$1" = "run" ]; then
-  envfile=""
+  envfile="" workdir=""
   while [ "$#" -gt 0 ] && [ "$1" != "{container.image_tag('server')}" ] && [ "$1" != "{container.image_tag('client')}" ]; do
     [ "$1" = "--env-file" ] && envfile=$2
+    [ "$1" = "-w" ] && workdir=$2
     shift
   done
   shift
   # Like podman: the command sees only the env file, plus a PATH to find tools.
+  [ -n "$workdir" ] && cd "$workdir"
   exec env -i PATH="$PATH" sh -c 'set -a; . "$0"; set +a; exec "$@"' "$envfile" "$@"
 fi
 exit 0
@@ -239,6 +241,26 @@ class WarmCache(unittest.TestCase):
         self.assertEqual(env.get("GOMODCACHE"), dict((n, v) for n, v, _ in container.warm_caches("server"))["GOMODCACHE"])
 
 
+def git_worktree(root, name="server-9"):
+    """A human repository with origin/main and a node worktree, like prepare() makes; clones go under root."""
+    root = Path(root)
+    checkout = root / f"talent-scout-{name.split('-')[0]}"
+    if not checkout.exists():
+        checkout.mkdir(parents=True)
+        for args in (("init", "-q", "-b", "main"), ("config", "user.email", "h@example.com"), ("config", "user.name", "h")):
+            subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
+        (checkout / "a.txt").write_text("base\n")
+        subprocess.run(["git", "add", "-A"], cwd=checkout, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=checkout, check=True, capture_output=True)
+        subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=checkout, check=True)
+    wt = root / "wt" / name
+    if not wt.exists():
+        subprocess.run(["git", "worktree", "add", "-q", str(wt), "-b", f"node/{name}", "--no-track", "origin/main"],
+                       cwd=checkout, check=True, capture_output=True)
+    container.CLONES = root / "clones"
+    return wt
+
+
 class AgentInBox(unittest.TestCase):
     """In container mode the agent CLI runs through podman with only the env file."""
 
@@ -270,9 +292,7 @@ class AgentInBox(unittest.TestCase):
         self.tmp.cleanup()
 
     def wt(self):
-        path = Path(self.tmp.name, "wt", "server-9")
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        return git_worktree(self.tmp.name)
 
     def test_the_agent_sees_only_the_sandbox_env(self):
         _, text = self.run.run_agent("opencode", "p", self.wt(), self.cfg)
@@ -282,6 +302,14 @@ class AgentInBox(unittest.TestCase):
         self.assertEqual(env["HOME"], container.HOME)
         self.assertEqual(env["GH_TOKEN"], self.token)
         self.assertIn("--name", self.log.read_text())
+
+    def test_the_agent_works_in_its_clone_never_the_humans_worktree(self):
+        wt = self.wt()
+        self.run.run_agent("opencode", "p", wt, self.cfg)
+        argv = [line for line in self.log.read_text().splitlines() if line.startswith("run ") and "opencode" in line][0]
+        self.assertIn(f"-w {container.clone_path(wt)}", argv)
+        self.assertNotIn(f"{wt}:", argv)
+        self.assertNotIn("talent-scout-server/.git", argv)
 
     def test_a_missing_image_stops_before_the_agent_starts(self):
         container.PODMAN, self.log = fake_podman(self.tmp.name, image_exists=False)
@@ -327,8 +355,7 @@ class EgressSurfacing(unittest.TestCase):
             os.environ["PATH"] = f"{bin_dir}:{os.environ['PATH']}"
             try:
                 run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
-                wt = Path(tmp, "wt", "server-9")
-                wt.mkdir(parents=True)
+                wt = git_worktree(tmp)
                 run.run_agent("opencode", "p", wt, {**CFG, "timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
             finally:
                 os.environ.clear()
@@ -343,6 +370,67 @@ class EgressSurfacing(unittest.TestCase):
         run.load_state = lambda node_id: {"egress_refused": ["cdn.example"]}
         run.post_handoff(node(85), "STATUS: done\nNEVER: x")
         self.assertIn("EGRESS: refused cdn.example", posted[0][-1])
+
+
+def git(cwd, *args):
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+class AgentClone(unittest.TestCase):
+    """Stage 4 (ADR 0004): the agent commits in its own clone; its commits come back as a bundle."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.checkout, self.wt = root / "talent-scout-server", root / "wt" / "server-9"
+        self.checkout.mkdir()
+        git(self.checkout, "init", "-q", "-b", "main")
+        git(self.checkout, "config", "user.email", "h@example.com")
+        git(self.checkout, "config", "user.name", "human")
+        (self.checkout / "a.txt").write_text("base\n")
+        git(self.checkout, "add", "-A")
+        git(self.checkout, "commit", "-qm", "base")
+        git(self.checkout, "update-ref", "refs/remotes/origin/main", "HEAD")
+        git(self.checkout, "worktree", "add", "-q", str(self.wt), "-b", "node/9-x", "--no-track", "origin/main")
+        self.saved = container.CLONES, container.PODMAN
+        container.CLONES = root / "clones"
+        container.PODMAN, self.log = fake_podman(self.tmp.name)
+
+    def tearDown(self):
+        container.CLONES, container.PODMAN = self.saved
+        self.tmp.cleanup()
+
+    def test_the_clone_is_a_standalone_repository_on_the_node_branch(self):
+        clone = container.ensure_clone(self.wt)
+        self.assertTrue((clone / ".git").is_dir(), "a worktree's .git file would point at the human's repo")
+        self.assertEqual(git(clone, "branch", "--show-current"), "node/9-x")
+        self.assertEqual(git(clone, "rev-parse", "HEAD"), git(self.wt, "rev-parse", "HEAD"))
+
+    def test_agent_mounts_hold_the_clone_and_never_the_humans_git(self):
+        clone = container.ensure_clone(self.wt)
+        with tempfile.TemporaryDirectory() as home:
+            specs = " ".join(str(src) for src, _ in container.agent_mounts(clone, False, Path(self.tmp.name, "h"), home))
+        self.assertNotIn(str(self.checkout / ".git"), specs)
+        self.assertNotIn(str(self.wt), specs)
+
+    def test_agent_commits_come_back_without_running_any_hook(self):
+        clone = container.ensure_clone(self.wt)
+        (clone / "a.txt").write_text("agent\n")
+        git(clone, "-c", "user.email=a@example.com", "-c", "user.name=agent", "commit", "-qam", "agent work")
+        marker = Path(self.tmp.name, "hook-ran")
+        hook = self.checkout / ".git" / "hooks" / "reference-transaction"
+        hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+        hook.chmod(0o755)
+        container.import_agent_commits(clone, self.wt, "server", CFG)
+        self.assertEqual(git(self.wt, "rev-parse", "HEAD"), git(clone, "rev-parse", "HEAD"))
+        self.assertEqual((self.wt / "a.txt").read_text(), "agent\n")
+        self.assertFalse(marker.exists(), "a hook in the human's repo ran during the import")
+
+    def test_checks_never_mount_the_humans_git(self):
+        with tempfile.TemporaryDirectory() as wt:
+            lib.run_code("true", str(self.wt), "server", CFG)
+        self.assertNotIn(str(self.checkout / ".git"), self.log.read_text())
+        self.assertIn("-buildvcs=false", container.container_env({})["GOFLAGS"])
 
 
 @unittest.skipUnless(os.environ.get("OPS_SANDBOX_IT") == "1", "set OPS_SANDBOX_IT=1 to run against real images")

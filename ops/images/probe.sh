@@ -33,4 +33,7 @@ if curl -sS -m 10 --noproxy '*' -o /dev/null https://api.github.com 2>/dev/null;
 else report PASS egress "no route around the proxy"; fi
 if getent hosts example.com >/dev/null 2>&1; then report FAIL egress "outside names resolve (DNS leak)"
 else report PASS egress "outside names do not resolve"; fi
-report PENDING git "agent clone arrives in sandbox stage 4; the main .git is still mounted"
+for repo in client server; do
+  if [ -e "$root/talent-scout-$repo/.git" ]; then report FAIL git "the human's $repo repository is visible"
+  else report PASS git "the human's $repo repository is invisible"; fi
+done

@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Podman rootless as the sandbox runtime

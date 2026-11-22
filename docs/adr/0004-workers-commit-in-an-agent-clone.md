@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Workers commit in an agent clone, never in the human's repository

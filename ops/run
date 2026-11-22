@@ -131,9 +131,11 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
     boxed = container.mode(cfg) == "container"
     repo = Path(wt).name.split("-")[0]
+    work = wt  # where the agent works: the human's worktree on the host, its own clone in the sandbox
     if boxed:
         container.require_image(repo)  # fail closed before anything starts
         container.ensure_egress(cfg)
+        work = container.ensure_clone(wt)
     if agent == "claude":
         claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
         tools = ["Read", "Glob", "Grep"] if read_only else CLAUDE_TOOLS
@@ -144,7 +146,7 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
         if not read_only:
             cmd += ["--permission-mode", "acceptEdits"]
     else:
-        cmd = ["opencode", "run", "--model", cfg["opencode_model"], "--dir", str(wt), "--format", "json"]
+        cmd = ["opencode", "run", "--model", cfg["opencode_model"], "--dir", str(work), "--format", "json"]
         if cfg.get("opencode_effort"):  # OpenCode calls reasoning effort a model variant
             cmd += ["--variant", cfg["opencode_effort"]]
         if read_only:
@@ -159,7 +161,7 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     with tempfile.TemporaryDirectory() as tmp, open(log_path, "a") as log, contextlib.ExitStack() as stack:
         gh_config = Path(tmp, "gh")
         gh_config.mkdir()
-        env = agent_env(wt, gh_config)
+        env = agent_env(work, gh_config)
         env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"permission": {"external_directory": outside}})
         box_name = None
         if boxed:
@@ -168,9 +170,9 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
             home = stack.enter_context(container.agent_home())
             env_path = stack.enter_context(container.env_file({**container.container_env(env),
                                                                **container.cache_env(repo)}))
-            mounts = container.agent_mounts(wt, read_only, HANDOFF_DIR, home) + container.cache_mounts(repo)
+            mounts = container.agent_mounts(work, read_only, HANDOFF_DIR, home) + container.cache_mounts(repo)
             box_name = f"ts-{agent}-{Path(wt).name}-{int(time.time())}"
-            cmd = container.podman_argv(repo, cfg, wt, cmd, env_path, mounts=mounts, read_only=read_only,
+            cmd = container.podman_argv(repo, cfg, work, cmd, env_path, mounts=mounts, read_only=read_only,
                                         name=box_name)
             env = dict(os.environ)  # for podman itself; the agent sees only the env file
         out = Path(tmp, "out")
@@ -220,6 +222,10 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
         refused = LAST_EGRESS_REFUSED = container.save_egress_log(Path(wt).name, started)
         if refused:
             print(f"  egress refused for {Path(wt).name}: {', '.join(refused)} (ops/.state/egress/)", flush=True)
+        if not read_only:
+            # The gate, the push and the review read the human's worktree; the agent's commits come
+            # back as a bundle with hooks off. Uncommitted changes in the clone stay there.
+            container.import_agent_commits(work, wt, repo, cfg)
     return child.returncode, "\n".join(seen["text"])
 
 
@@ -231,17 +237,24 @@ def prepare(node):
         slug = re.sub(r"[^a-z0-9]+", "-", node.title.lower())[:30].strip("-")
         sh(["git", "worktree", "add", "-q", str(wt), "-b", f"node/{node.number}-{slug}",
             "--no-track", "origin/main"], cwd=checkout)
+        cfg = config()
+        if container.mode(cfg) == "container":
+            container.ensure_clone(wt)
         if node.repo == "client":
-            cfg = config()
             # The client build reads its local, non-production values from .env. Nothing the server agent
             # runs reads .env (config and the live tests use the process env), so its secrets stay out.
             agent_env = OPS / "env" / "client.env.agent"
-            if agent_env.exists():
-                shutil.copy2(agent_env, wt / ".env")
-            if container.mode(cfg) == "container":
-                done = container.run_code("pnpm install --frozen-lockfile", str(wt), "client", cfg, timeout=600)
-                if done.returncode:
-                    raise RuntimeError(f"pnpm install in the sandbox: {done.stderr.strip()[-500:]}")
+            boxed = container.mode(cfg) == "container"
+            # The checks run in the worktree; in the sandbox the agent works in its clone. Both need these.
+            targets = [wt] + ([container.clone_path(wt)] if boxed else [])
+            for target in targets:
+                if agent_env.exists():
+                    shutil.copy2(agent_env, target / ".env")
+            if boxed:
+                for target in targets:
+                    done = container.run_code("pnpm install --frozen-lockfile", str(target), "client", cfg, timeout=600)
+                    if done.returncode:
+                        raise RuntimeError(f"pnpm install in the sandbox: {done.stderr.strip()[-500:]}")
             else:
                 sh(["pnpm", "install", "--frozen-lockfile"], cwd=wt, timeout=600, env=check_env())
     return wt
@@ -436,6 +449,7 @@ def reconcile(nodes, repo=None):
             print(f"{node.id}: closed, but {wt} is {'dirty' if dirty else 'not merged'}; left in place")
             continue
         sh(["git", "worktree", "remove", str(wt)], cwd=checkout)
+        shutil.rmtree(container.clone_path(wt), ignore_errors=True)
         sh(["git", "branch", "-d", branch], cwd=checkout, check=False)
         state_path(node.id).unlink(missing_ok=True)
         handoff_path(node.id).unlink(missing_ok=True)
