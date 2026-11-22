@@ -24,6 +24,13 @@ if [ "$got_mem" = "$mem" ]; then report PASS memory "$got_mem"; else report FAIL
 got_pids=$(cat /sys/fs/cgroup/pids.max 2>/dev/null)
 if [ "$got_pids" = "$pids" ]; then report PASS pids "$got_pids"; else report FAIL pids "expected $pids, got $got_pids"; fi
 
+# Agent CLIs: they must start, and their state and config dirs must be writable (pilot server#92).
+if mkdir -p "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$GH_CONFIG_DIR" 2>/dev/null; then report PASS agent-home "state, cache and gh config are writable"
+else report FAIL agent-home "cannot create state, cache or gh config dirs"; fi
+for cli in claude opencode gh; do
+  if "$cli" --version >/dev/null 2>&1; then report PASS agent-cli "$cli starts"; else report FAIL agent-cli "$cli does not start"; fi
+done
+
 # Egress: listed hosts only, only through the proxy, and no DNS for outside names.
 if curl -sS -m 20 -o /dev/null https://api.github.com 2>/dev/null; then report PASS egress "listed host reachable via the proxy"
 else report FAIL egress "api.github.com is not reachable through the proxy"; fi

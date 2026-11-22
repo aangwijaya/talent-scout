@@ -89,7 +89,10 @@ def warm(repo, cfg):
 def container_env(env):
     """The host env translated for the image: host paths and host logins dropped, caches in /tmp."""
     out = {k: v for k, v in env.items() if k not in DROP}
-    out.update(HOME=HOME, GOPATH="/tmp/go", GOCACHE="/tmp/go-build", GH_CONFIG_DIR=f"{HOME}/.config/gh")
+    # Logins are mounted under HOME/.config and HOME/.local/share, so podman creates those parents as
+    # root; state, cache and gh config go to /tmp, where the agent's user can create them.
+    out.update(HOME=HOME, GOPATH="/tmp/go", GOCACHE="/tmp/go-build", GH_CONFIG_DIR="/tmp/gh-config",
+               XDG_STATE_HOME="/tmp/xdg/state", XDG_CACHE_HOME="/tmp/xdg/cache")
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
         out[name] = PROXY_URL
     for name in ("NO_PROXY", "no_proxy"):
@@ -330,12 +333,17 @@ def probe(repo, cfg):
                                                          "GOMODCACHE", "GOCACHE", "npm_config_store_dir",
                                                          "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
                                                          "NO_PROXY", "no_proxy",
-                                                         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"})
+                                                         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+                                                         "XDG_STATE_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR"})
     memory = str(parse_bytes(cfg.get("sandbox_memory", "6g")))
-    with tempfile.TemporaryDirectory() as cwd, env_file(container_env(check_env())) as path:
+    with tempfile.TemporaryDirectory() as cwd, tempfile.TemporaryDirectory() as share, \
+            tempfile.TemporaryDirectory() as conf, env_file(container_env(check_env())) as path:
+        # Empty stand-ins at the agent login mount points, so the probe sees the same root-owned parents.
         argv = podman_argv(repo, cfg, cwd, ["sh", "/opt/probe/probe.sh", str(Path.home()), str(ROOT), memory,
                                             str(cfg.get("sandbox_pids", 1024)), ",".join(allowed)], path,
-                           mounts=[(f"{IMAGES / 'probe.sh'}:/opt/probe/probe.sh:ro", None)])
+                           mounts=[(f"{IMAGES / 'probe.sh'}:/opt/probe/probe.sh:ro", None),
+                                   (f"{share}:{HOME}/.local/share/opencode:rw", None),
+                                   (f"{conf}:{HOME}/.config/opencode:rw", None)])
         done = subprocess.run(argv, text=True, capture_output=True, timeout=120)
     if done.returncode:
         raise SandboxError(f"probe could not run in the {repo} sandbox: {done.stderr.strip()[-500:]}")

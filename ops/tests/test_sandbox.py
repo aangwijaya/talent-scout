@@ -112,6 +112,13 @@ class Env(unittest.TestCase):
         self.assertEqual(env["GH_TOKEN"], "github_pat_x")
         self.assertTrue(env["GOCACHE"].startswith("/tmp/"))
 
+    def test_writable_state_lives_outside_the_mounted_login_parents(self):
+        # Podman creates HOME/.config and HOME/.local as root to mount the logins under them; an agent
+        # CLI that writes state there dies with EACCES before it starts (pilot server#92).
+        env = container.container_env({})
+        for name in ("XDG_STATE_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR"):
+            self.assertTrue(env[name].startswith("/tmp/"), name)
+
     def test_go_never_fetches_outside_the_module_proxy(self):
         env = container.container_env({"GOPROXY": "https://proxy.golang.org,direct"})
         self.assertEqual(env["GOPROXY"], "https://proxy.golang.org")
