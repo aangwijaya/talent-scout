@@ -94,9 +94,9 @@ class Argv(unittest.TestCase):
         self.assertNotIn(str(Path.home()), sources)
         self.assertNotIn(str(lib.ROOT), sources)
 
-    def test_the_worktree_is_mounted_read_only_for_a_reviewer(self):
+    def test_a_reviewer_gets_a_discarding_overlay_never_a_writable_mount(self):
         argv, wt = self.argv(read_only=True)
-        self.assertIn(f"{wt}:{wt}:ro", argv)
+        self.assertIn(f"{wt}:{wt}:O", argv)
         argv, wt = self.argv()
         self.assertIn(f"{wt}:{wt}:rw", argv)
 
