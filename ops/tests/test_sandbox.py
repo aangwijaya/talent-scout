@@ -30,6 +30,7 @@ echo "$@" >> {log}
 if [ "$1 $2" = "image exists" ]; then exit {0 if image_exists else 1}; fi
 case " $* " in *" run -d "*) exit 0 ;; esac
 if [ "$1" = "ps" ]; then exit 0; fi
+if [ "$1" = "logs" ]; then cat {tmp}/proxy.log 2>/dev/null; exit 0; fi
 if [ "$1" = "run" ]; then
   envfile=""
   while [ "$#" -gt 0 ] && [ "$1" != "{container.image_tag('server')}" ] && [ "$1" != "{container.image_tag('client')}" ]; do
@@ -293,6 +294,55 @@ class AgentInBox(unittest.TestCase):
         with self.assertRaises(container.SandboxError) as err:
             self.run.run_agent("claude", "p", self.wt(), self.cfg)
         self.assertIn("claude setup-token", str(err.exception))
+
+
+class EgressSurfacing(unittest.TestCase):
+    """Stage 3b: a refused host reaches the retry, the handoff and ops/triage."""
+
+    def test_the_egress_line_ends_the_previous_handoff_field(self):
+        text = lib.with_egress("STATUS: done\nNEVER: push", ["example.com", "evil.test"])
+        fields = lib.parse_handoff(text)
+        self.assertEqual(fields["NEVER"], "push")
+        self.assertIn("example.com, evil.test", fields["EGRESS"])
+        self.assertIn("ops/egress-allowlist", fields["EGRESS"])
+        self.assertEqual(lib.with_egress("STATUS: done", []), "STATUS: done")
+
+    def test_refusals_from_state_files_are_listed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "client-85.json").write_text('{"attempts": 1, "egress_refused": ["cdn.example"]}')
+            Path(tmp, "server-9.json").write_text('{"attempts": 1}')
+            self.assertEqual(lib.egress_refusals(Path(tmp)), {"client#85": ["cdn.example"]})
+
+    def test_a_boxed_agent_run_reports_its_refused_hosts(self):
+        from test_ops import load_script
+        with tempfile.TemporaryDirectory() as tmp:
+            container.PODMAN, _ = fake_podman(tmp)
+            Path(tmp, "proxy.log").write_text('NOTICE x [1]: Proxying refused on filtered domain "cdn.example"\n')
+            run = load_script("run")
+            bin_dir = Path(tmp, "bin")
+            bin_dir.mkdir()
+            Path(bin_dir, "opencode").write_text("#!/bin/sh\necho ok\n")
+            Path(bin_dir, "opencode").chmod(0o755)
+            saved = dict(os.environ)
+            os.environ["PATH"] = f"{bin_dir}:{os.environ['PATH']}"
+            try:
+                run.STATE, run.HANDOFF_DIR = Path(tmp), Path(tmp, "handoff")
+                wt = Path(tmp, "wt", "server-9")
+                wt.mkdir(parents=True)
+                run.run_agent("opencode", "p", wt, {**CFG, "timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
+            finally:
+                os.environ.clear()
+                os.environ.update(saved)
+            self.assertEqual(run.LAST_EGRESS_REFUSED, ["cdn.example"])
+
+    def test_the_posted_handoff_carries_the_refusals(self):
+        from test_ops import load_script, node
+        run = load_script("run")
+        posted = []
+        run.gh = lambda *args: posted.append(args) or ""
+        run.load_state = lambda node_id: {"egress_refused": ["cdn.example"]}
+        run.post_handoff(node(85), "STATUS: done\nNEVER: x")
+        self.assertIn("EGRESS: refused cdn.example", posted[0][-1])
 
 
 @unittest.skipUnless(os.environ.get("OPS_SANDBOX_IT") == "1", "set OPS_SANDBOX_IT=1 to run against real images")

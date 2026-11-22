@@ -8,7 +8,7 @@ import re
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from lib import REPOS, ROOT, analyze, gh, last_handoff, load_nodes, parse_handoff, sh
+from lib import REPOS, ROOT, analyze, egress_refusals, gh, last_handoff, load_nodes, parse_handoff, sh
 
 
 def repeated_lessons(text):
@@ -38,6 +38,11 @@ def main():
         print("NO NODE BLOCK: " + ", ".join(graph["unmapped"]))
     if graph["cycles"]:
         print("CYCLES: " + ", ".join(graph["cycles"]))
+    refusals = {k: v for k, v in egress_refusals().items() if k in nodes and not nodes[k].closed}
+    if refusals:
+        print("EGRESS REFUSED (add to ops/egress-allowlist in a reviewed PR, or treat as suspicious)")
+        for key, hosts in refusals.items():
+            print(f"  {key}: {', '.join(hosts)}")
     print(f"READY {len(graph['ready'])}, ACTIVE {len(graph['active'])}, WAITING {len(graph['waiting'])}")
     for repo, full in REPOS.items():
         lessons = sh(["git", "show", "origin/main:docs/LESSONS.md"], cwd=ROOT / f"talent-scout-{repo}", check=False).stdout
