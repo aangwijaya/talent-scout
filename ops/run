@@ -412,7 +412,8 @@ def process(node, cfg):
                 gh("pr", "merge", branch, "-R", REPOS[node.repo], "--merge", "--delete-branch")
                 return print(f"{node.id}: merged")
             url = gh("pr", "view", branch, "-R", REPOS[node.repo], "--json", "url", "--jq", ".url").strip()
-            escalate(node, f"Tier {result['tier']} PR is green and reviewed.{review_note} Merge when you agree: {url}")
+            reviewed = "green and reviewed" if result["tier"] >= 2 else "green (tier 1: no independent review)"
+            escalate(node, f"Tier {result['tier']} PR is {reviewed}.{review_note} Merge when you agree: {url}")
             return print(f"\n>>> {node.id} is ready for you to merge: {url}\n{'   ' + review_note + chr(10) if review_note else ''}"
                          f"    After merging, ops/run --reconcile tidies labels and the worktree.\n")
         key = saw_key(failures)

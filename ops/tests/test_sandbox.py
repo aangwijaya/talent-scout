@@ -153,6 +153,13 @@ class Egress(unittest.TestCase):
                'NOTICE  Nov 22 10:00:04 [7]: Proxying refused on filtered domain "example.com"\n')
         self.assertEqual(container.refused_hosts(log), ["example.com", "evil.test"])
 
+    def test_allowed_requests_are_logged_too(self):
+        self.assertIn("LogLevel Info", container.tinyproxy_conf())
+        log = ('INFO x [7]: Established connection to host "api.anthropic.com" using file descriptor 7.\n'
+               'INFO x [8]: Established connection to host "api.github.com" using file descriptor 8.\n'
+               'INFO x [9]: Established connection to host "api.anthropic.com" using file descriptor 9.\n')
+        self.assertEqual(container.allowed_hosts(log), ["api.anthropic.com", "api.github.com"])
+
     def test_no_proxy_image_means_nothing_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp, "podman")
