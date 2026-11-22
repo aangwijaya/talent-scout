@@ -25,6 +25,8 @@ def fake_podman(tmp, image_exists=True):
     script.write_text(f"""#!/bin/sh
 echo "$@" >> {log}
 if [ "$1 $2" = "image exists" ]; then exit {0 if image_exists else 1}; fi
+case " $* " in *" run -d "*) exit 0 ;; esac
+if [ "$1" = "ps" ]; then exit 0; fi
 if [ "$1" = "run" ]; then
   envfile=""
   while [ "$#" -gt 0 ] && [ "$1" != "{container.image_tag('server')}" ] && [ "$1" != "{container.image_tag('client')}" ]; do
@@ -107,6 +109,52 @@ class Env(unittest.TestCase):
     def test_go_never_fetches_outside_the_module_proxy(self):
         env = container.container_env({"GOPROXY": "https://proxy.golang.org,direct"})
         self.assertEqual(env["GOPROXY"], "https://proxy.golang.org")
+
+
+class Egress(unittest.TestCase):
+    """Sandbox stage 3: an internal network whose only way out is the allowlist proxy."""
+
+    def test_every_sandbox_joins_only_the_internal_network(self):
+        with tempfile.TemporaryDirectory() as wt:
+            argv = container.podman_argv("server", CFG, wt, ["true"], "/tmp/env")
+        self.assertIn(f"--network={container.NETWORK}", argv)
+        self.assertEqual(sum(a.startswith("--network") for a in argv), 1)
+
+    def test_tools_go_through_the_proxy_and_localhost_stays_local(self):
+        env = container.container_env({"HTTPS_PROXY": "http://host-proxy:3128", "no_proxy": "*"})
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            self.assertEqual(env[name], container.PROXY_URL)
+        for name in ("NO_PROXY", "no_proxy"):
+            self.assertEqual(env[name], "localhost,127.0.0.1,::1")
+
+    def test_the_filter_is_exact_anchored_hosts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            allow = Path(tmp, "allow")
+            allow.write_text("# comment\napi.github.com\n\nproxy.golang.org  # Go\n")
+            self.assertEqual(container.filter_lines(allow), [r"^api\.github\.com$", r"^proxy\.golang\.org$"])
+
+    def test_refused_hosts_are_read_from_the_proxy_log(self):
+        log = ('NOTICE  Nov 22 10:00:01 [7]: Proxying refused on filtered domain "example.com"\n'
+               'CONNECT Nov 22 10:00:02 [7]: Connect (file descriptor 6): 10.89.0.5\n'
+               'NOTICE  Nov 22 10:00:03 [7]: Proxying refused on filtered domain "evil.test"\n'
+               'NOTICE  Nov 22 10:00:04 [7]: Proxying refused on filtered domain "example.com"\n')
+        self.assertEqual(container.refused_hosts(log), ["example.com", "evil.test"])
+
+    def test_no_proxy_image_means_nothing_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp, "podman")
+            script.write_text(f"""#!/bin/sh
+echo "$@" >> {tmp}/log
+case "$*" in "image exists {container.image_tag('egress')}") exit 1 ;; "image exists"*) exit 0 ;; esac
+exit 0
+""")
+            script.chmod(0o755)
+            container.PODMAN = str(script)
+            with tempfile.TemporaryDirectory() as wt:
+                with self.assertRaises(container.SandboxError) as err:
+                    lib.run_code(f"touch {wt}/ran", wt, "server", CFG)
+                self.assertFalse(Path(wt, "ran").exists())
+            self.assertIn("ops/sandbox build egress", str(err.exception))
 
 
 class RunCode(unittest.TestCase):

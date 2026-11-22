@@ -12,10 +12,10 @@ from lib import REPOS, config
 args = sys.argv[1:]
 if not args or args[0] not in ("build", "warm", "tags"):
     sys.exit(__doc__)
-repos = args[1:] or list(REPOS)
+repos = args[1:] or [*REPOS, "egress"]
 for repo in repos:
     if args[0] == "build":
         container.build(repo)
-    if args[0] in ("build", "warm"):
+    if args[0] in ("build", "warm") and repo in REPOS:
         container.warm(repo, {**config(), "sandbox": "container"})
     print(container.image_tag(repo))

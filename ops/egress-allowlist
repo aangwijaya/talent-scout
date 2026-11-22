@@ -1,0 +1,9 @@
+# The only hosts a sandbox can reach, through the egress proxy (ADR 0002). One exact host per line.
+# Adding a host is a reviewed change to this file; a refusal shows up in the node's egress log.
+api.anthropic.com
+opencode.ai
+api.github.com
+github.com
+proxy.golang.org
+sum.golang.org
+registry.npmjs.org

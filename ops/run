@@ -132,6 +132,7 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     repo = Path(wt).name.split("-")[0]
     if boxed:
         container.require_image(repo)  # fail closed before anything starts
+        container.ensure_egress(cfg)
     if agent == "claude":
         claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
         tools = ["Read", "Glob", "Grep"] if read_only else CLAUDE_TOOLS
@@ -214,6 +215,10 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
                     cost = f", ${seen['cost']:.2f}" if agent == "opencode" else ""
                     print(f"  {agent} working, {elapsed // 60} min{cost} (tail -f {log_path})", flush=True)
     LAST_AGENT_ERROR = seen.get("error")
+    if boxed:
+        refused = container.save_egress_log(Path(wt).name, started)
+        if refused:
+            print(f"  egress refused for {Path(wt).name}: {', '.join(refused)} (ops/.state/egress/)", flush=True)
     return child.returncode, "\n".join(seen["text"])
 
 
