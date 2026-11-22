@@ -186,8 +186,18 @@ def refused_hosts(log):
     return seen
 
 
+def allowed_hosts(log):
+    """Hosts the proxy connected to, from its Info-level log (ADR 0002: allowed requests are logged too)."""
+    seen = []
+    for host in re.findall(r'Established connection to host "([^"]+)"', log):
+        if host not in seen:
+            seen.append(host)
+    return seen
+
+
 def tinyproxy_conf():
-    return "\n".join(["Port 8888", "Listen 0.0.0.0", "Timeout 600", "MaxClients 64", "LogLevel Notice",
+    # Info, not Notice: Notice logs only refusals, and ADR 0002 wants every request on record.
+    return "\n".join(["Port 8888", "Listen 0.0.0.0", "Timeout 600", "MaxClients 64", "LogLevel Info",
                       "Filter \"/etc/egress/filter\"", "FilterType ere", "FilterURLs Off", "FilterDefaultDeny Yes",
                       "FilterCaseSensitive Off", "ConnectPort 443", "DisableViaHeader Yes", ""])
 
