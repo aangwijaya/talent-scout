@@ -24,5 +24,13 @@ if [ "$got_mem" = "$mem" ]; then report PASS memory "$got_mem"; else report FAIL
 got_pids=$(cat /sys/fs/cgroup/pids.max 2>/dev/null)
 if [ "$got_pids" = "$pids" ]; then report PASS pids "$got_pids"; else report FAIL pids "expected $pids, got $got_pids"; fi
 
-report PENDING egress "allowlist proxy arrives in sandbox stage 3"
+# Egress: listed hosts only, only through the proxy, and no DNS for outside names.
+if curl -sS -m 20 -o /dev/null https://api.github.com 2>/dev/null; then report PASS egress "listed host reachable via the proxy"
+else report FAIL egress "api.github.com is not reachable through the proxy"; fi
+if curl -sS -m 20 -o /dev/null https://example.com 2>/dev/null; then report FAIL egress "example.com (not listed) was reachable"
+else report PASS egress "unlisted host refused"; fi
+if curl -sS -m 10 --noproxy '*' -o /dev/null https://api.github.com 2>/dev/null; then report FAIL egress "direct connection bypassed the proxy"
+else report PASS egress "no route around the proxy"; fi
+if getent hosts example.com >/dev/null 2>&1; then report FAIL egress "outside names resolve (DNS leak)"
+else report PASS egress "outside names do not resolve"; fi
 report PENDING git "agent clone arrives in sandbox stage 4; the main .git is still mounted"

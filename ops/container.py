@@ -11,7 +11,10 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from lib import OPS, ROOT, check_env
+import re
+import time
+
+from lib import OPS, ROOT, STATE, check_env
 
 IMAGES = OPS / "images"
 PODMAN = "podman"
@@ -21,6 +24,11 @@ DROP = {"PATH", "HOME", "GOPATH", "GOCACHE", "GOROOT", "GOTOOLCHAIN", "PNPM_HOME
         "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "TMPDIR", "SHELL",
         "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "GH_CONFIG_DIR"}
 CLAUDE_TOKEN = OPS / "env" / "claude.oauth-token"
+NETWORK = "ts-sandbox"  # --internal: no route out except the proxy
+PROXY_NAME = "ts-egress"
+PROXY_URL = f"http://{PROXY_NAME}:8888"
+ALLOWLIST = OPS / "egress-allowlist"
+EGRESS_DIR = STATE / "egress"
 GO_BUILD_CACHE = OPS / ".cache" / "sandbox" / "go-build"  # filled only from main, by `ops/sandbox warm`
 
 
@@ -59,6 +67,7 @@ def warm(repo, cfg):
     if repo != "server":
         return
     require_image(repo)
+    ensure_egress(cfg)
     checkout = ROOT / "talent-scout-server"
     GO_BUILD_CACHE.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout, check=True)
@@ -80,6 +89,11 @@ def container_env(env):
     """The host env translated for the image: host paths and host logins dropped, caches in /tmp."""
     out = {k: v for k, v in env.items() if k not in DROP}
     out.update(HOME=HOME, GOPATH="/tmp/go", GOCACHE="/tmp/go-build", GH_CONFIG_DIR=f"{HOME}/.config/gh")
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        out[name] = PROXY_URL
+    for name in ("NO_PROXY", "no_proxy"):
+        out[name] = "localhost,127.0.0.1,::1"  # Playwright's local servers stay local
+    out["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"  # telemetry would only add refusals
     if "GOPROXY" in out:
         out["GOPROXY"] = "https://proxy.golang.org"  # no `direct`: modules come through the proxy only
     for key, git_key in (("NAME", "user.name"), ("EMAIL", "user.email")):
@@ -126,11 +140,11 @@ def git_common_dir(path):
 
 
 def podman_argv(repo, cfg, cwd, command, env_file, mounts=(), read_only=False, name=None):
-    argv = [PODMAN, "run", "--rm", "-i", "--init", "--userns=keep-id",
+    argv = [str(PODMAN), "run", "--rm", "-i", "--init", "--userns=keep-id",
             f"--cpus={cfg.get('sandbox_cpus', 4)}", f"--memory={cfg.get('sandbox_memory', '6g')}",
             f"--pids-limit={cfg.get('sandbox_pids', 1024)}", "--cap-drop=all", "--security-opt=no-new-privileges",
             "--tmpfs", f"{HOME}:rw,exec,mode=1777", "--tmpfs", "/tmp:rw,exec,mode=1777",
-            "--env-file", str(env_file), "-w", str(cwd), "-v", f"{cwd}:{cwd}:{'ro' if read_only else 'rw'}"]
+            f"--network={NETWORK}", "--env-file", str(env_file), "-w", str(cwd), "-v", f"{cwd}:{cwd}:{'ro' if read_only else 'rw'}"]
     if name:
         argv += ["--name", name]
     for source, opt in mounts:  # (path, option) mounts at the same path; (full spec, None) as given
@@ -152,9 +166,77 @@ def env_file(env):
         os.unlink(path)
 
 
+def filter_lines(path=ALLOWLIST):
+    hosts = [line.split("#", 1)[0].strip() for line in Path(path).read_text().splitlines()]
+    return [f"^{re.escape(host)}$" for host in hosts if host]
+
+
+def refused_hosts(log):
+    seen = []
+    for host in re.findall(r'filtered (?:domain|url) "([^"]+)"', log):
+        if host not in seen:
+            seen.append(host)
+    return seen
+
+
+def tinyproxy_conf():
+    return "\n".join(["Port 8888", "Listen 0.0.0.0", "Timeout 600", "MaxClients 64", "LogLevel Notice",
+                      "Filter \"/etc/egress/filter\"", "FilterType ere", "FilterURLs Off", "FilterDefaultDeny Yes",
+                      "FilterCaseSensitive Off", "ConnectPort 443", "DisableViaHeader Yes", ""])
+
+
+def ensure_egress(cfg):
+    """Start the internal network and the allowlist proxy, or refuse (fail closed)."""
+    require_image("egress")
+    EGRESS_DIR.mkdir(parents=True, exist_ok=True)
+    (EGRESS_DIR / "filter").write_text("\n".join(filter_lines()) + "\n")
+    (EGRESS_DIR / "tinyproxy.conf").write_text(tinyproxy_conf())
+    digest = hashlib.sha256((EGRESS_DIR / "filter").read_bytes() + tinyproxy_conf().encode() + b"resolv-v1"
+                            + image_tag("egress").encode()).hexdigest()[:12]
+    if subprocess.run([PODMAN, "network", "exists", NETWORK], capture_output=True).returncode:
+        subprocess.run([PODMAN, "network", "create", "--internal", NETWORK], capture_output=True, check=True)
+    running = subprocess.run([PODMAN, "ps", "--filter", f"name=^{PROXY_NAME}$", "--format", "{{.Labels}}"],
+                             capture_output=True, text=True).stdout
+    if f"ts.egress:{digest}" in running:  # podman prints labels as map[key:value]
+        return
+    subprocess.run([PODMAN, "rm", "-f", "-t", "0", "--ignore", PROXY_NAME], capture_output=True)
+    # The proxy alone joins both networks. Its resolv.conf lists only the host's resolver: podman would
+    # put the internal network's DNS first, which answers "no such name" for outside hosts (and is why
+    # a sandbox cannot leak data through DNS), so lookups would stop there.
+    nameserver = next((line.split()[1] for line in Path("/etc/resolv.conf").read_text().splitlines()
+                       if line.startswith("nameserver")), "1.1.1.1")
+    (EGRESS_DIR / "resolv.conf").write_text(f"nameserver {nameserver}\n")
+    done = subprocess.run([PODMAN, "run", "-d", "--rm", "--name", PROXY_NAME, "--label", f"ts.egress={digest}",
+                           "--user", "65534:65534", "--cap-drop=all", "--security-opt=no-new-privileges",
+                           "--network", "podman", "--network", NETWORK,
+                           "-v", f"{EGRESS_DIR / 'resolv.conf'}:/etc/resolv.conf:ro",
+                           "-v", f"{EGRESS_DIR / 'tinyproxy.conf'}:/etc/egress/tinyproxy.conf:ro",
+                           "-v", f"{EGRESS_DIR / 'filter'}:/etc/egress/filter:ro",
+                           image_tag("egress"), "tinyproxy", "-d", "-c", "/etc/egress/tinyproxy.conf"],
+                          capture_output=True, text=True)
+    if done.returncode:
+        raise SandboxError(f"the egress proxy did not start: {done.stderr.strip()[-300:]}")
+    time.sleep(1)
+
+
+def egress_log(since):
+    """The proxy's log since a unix time, for one node's run."""
+    done = subprocess.run([PODMAN, "logs", "--since", str(int(since)), PROXY_NAME], capture_output=True, text=True)
+    return done.stdout + done.stderr
+
+
+def save_egress_log(node_id, since):
+    text = egress_log(since)
+    EGRESS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(EGRESS_DIR / f"{node_id.replace('#', '-')}.log", "a") as out:
+        out.write(text)
+    return refused_hosts(text)
+
+
 def run_code(command, cwd, repo, cfg, timeout=None, extra_mounts=()):
     """Run a shell command from a worktree inside the sandbox, with the check env (no logins)."""
     require_image(repo)
+    ensure_egress(cfg)
     mounts = list(cache_mounts(repo)) + list(extra_mounts)
     common = git_common_dir(cwd)
     if common and not Path(common).is_relative_to(Path(cwd)):
@@ -202,12 +284,16 @@ def claude_token():
 def probe(repo, cfg):
     """Run images/probe.sh in the sandbox and return its PASS/FAIL/PENDING lines."""
     require_image(repo)
+    ensure_egress(cfg)
     allowed = sorted(set(container_env(check_env())) | {"PWD", "SHLVL", "HOSTNAME", "container", "_", "TERM",
                                                          "PATH", "LANG", "COREPACK_ENABLE_AUTO_PIN",
                                                          "COREPACK_HOME", "NODE_VERSION", "YARN_VERSION",
                                                          "GOTOOLCHAIN", "GOPROXY", "GOFLAGS",
                                                          "PLAYWRIGHT_BROWSERS_PATH", "OLDPWD",
-                                                         "GOMODCACHE", "GOCACHE", "npm_config_store_dir"})
+                                                         "GOMODCACHE", "GOCACHE", "npm_config_store_dir",
+                                                         "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+                                                         "NO_PROXY", "no_proxy",
+                                                         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"})
     memory = str(parse_bytes(cfg.get("sandbox_memory", "6g")))
     with tempfile.TemporaryDirectory() as cwd, env_file(container_env(check_env())) as path:
         argv = podman_argv(repo, cfg, cwd, ["sh", "/opt/probe/probe.sh", str(Path.home()), str(ROOT), memory,

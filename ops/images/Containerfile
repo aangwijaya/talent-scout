@@ -33,3 +33,7 @@ ARG PLAYWRIGHT_VERSION=1.64.1
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium \
  && chmod -R a+rX /opt/ms-playwright && rm -rf /var/lib/apt/lists/* /root/.npm
+
+FROM ${NODE_IMAGE} AS egress
+# The allowlist proxy (ADR 0002). Config and filter are mounted at run time from ops/.state/egress.
+RUN apt-get update && apt-get install -y --no-install-recommends tinyproxy && rm -rf /var/lib/apt/lists/*
