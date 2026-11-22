@@ -217,11 +217,34 @@ def tier_of(files, cfg):
 def parse_handoff(text):
     """Split a handoff into its fields. Missing fields stay absent."""
     found = {}
-    for name in HANDOFF_FIELDS + ["GAPS"]:
-        match = re.search(rf"^{name}:[ \t]*(.*?)(?=^(?:{'|'.join(HANDOFF_FIELDS + ['GAPS'])}):|\Z)",
+    names = HANDOFF_FIELDS + ["GAPS", "EGRESS"]
+    for name in names:
+        match = re.search(rf"^{name}:[ \t]*(.*?)(?=^(?:{'|'.join(names)}):|\Z)",
                           text, re.S | re.M)
         if match and match.group(1).strip():
             found[name] = match.group(1).strip()
+    return found
+
+
+def with_egress(text, hosts):
+    """Add the hosts the sandbox's proxy refused as their own handoff field (ADR 0002)."""
+    if not hosts:
+        return text
+    return (text.rstrip() + f"\nEGRESS: refused {', '.join(hosts)}. If the need is legitimate, add the host to "
+            "ops/egress-allowlist in a reviewed PR; otherwise treat it as suspicious.")
+
+
+def egress_refusals(state_dir=STATE):
+    """node id -> refused hosts, from the orchestrator's per-node state files."""
+    found = {}
+    for path in sorted(Path(state_dir).glob("*.json")):
+        try:
+            hosts = json.loads(path.read_text()).get("egress_refused")
+        except (ValueError, AttributeError):
+            continue
+        if hosts:
+            repo, _, number = path.stem.partition("-")
+            found[f"{repo}#{number}"] = hosts
     return found
 
 

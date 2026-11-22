@@ -27,7 +27,7 @@ import container
 from checks import feedback, gate, saw_key
 from lib import (AGENT_LOGIN_KEEP, AGENTS, HANDOFF_DIR, HANDOFF_MARK, OPS, PROXY_ENV_KEEP, REPOS, ROOT, STATE,
                  STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, check_env, config, gh, handoff_path, load_nodes,
-                 load_state, parse_handoff, save_state, sh, state_path)
+                 load_state, parse_handoff, save_state, sh, state_path, with_egress)
 
 _loader = importlib.machinery.SourceFileLoader("brief", str(OPS / "brief"))
 _spec = importlib.util.spec_from_loader("brief", _loader)
@@ -36,6 +36,7 @@ _loader.exec_module(_brief)
 
 AUTO = "--auto" in sys.argv
 LAST_AGENT_ERROR = None  # the API error that ended the last agent run, if any
+LAST_EGRESS_REFUSED = []  # hosts the sandbox's proxy refused during the last agent run
 REVIEW_UNAVAILABLE = None  # why the last independent review returned no findings
 CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm:*)", "Bash(go:*)", "Bash(gofmt:*)",
                 "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)", "Bash(git diff:*)",
@@ -125,8 +126,8 @@ def read_events(lines, seen, log, events):
 
 
 def run_agent(agent, prompt, wt, cfg, read_only=False):
-    global LAST_AGENT_ERROR
-    LAST_AGENT_ERROR = None
+    global LAST_AGENT_ERROR, LAST_EGRESS_REFUSED
+    LAST_AGENT_ERROR, LAST_EGRESS_REFUSED = None, []
     HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
     boxed = container.mode(cfg) == "container"
     repo = Path(wt).name.split("-")[0]
@@ -216,7 +217,7 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
                     print(f"  {agent} working, {elapsed // 60} min{cost} (tail -f {log_path})", flush=True)
     LAST_AGENT_ERROR = seen.get("error")
     if boxed:
-        refused = container.save_egress_log(Path(wt).name, started)
+        refused = LAST_EGRESS_REFUSED = container.save_egress_log(Path(wt).name, started)
         if refused:
             print(f"  egress refused for {Path(wt).name}: {', '.join(refused)} (ops/.state/egress/)", flush=True)
     return child.returncode, "\n".join(seen["text"])
@@ -254,6 +255,7 @@ def set_status(node, new):
 
 
 def post_handoff(node, text):
+    text = with_egress(text, load_state(node.id).get("egress_refused", []))
     gh("issue", "comment", str(node.number), "-R", REPOS[node.repo],
        "--body", f"{HANDOFF_MARK}\n{text.strip()}")
 
@@ -346,6 +348,14 @@ def process(node, cfg):
         save_state(node.id, state)
         handoff_file.unlink(missing_ok=True)
         run_agent(node.agent, _brief.build(node, note), wt, cfg)
+        if LAST_EGRESS_REFUSED:
+            # A refusal is not a failure: the agent got an error and went on. It shows up in the retry's
+            # DEAD ENDS, the posted handoff and ops/triage, where the human decides.
+            new = [h for h in LAST_EGRESS_REFUSED if h not in state.setdefault("egress_refused", [])]
+            state["egress_refused"] += new
+            if new:
+                state["dead_ends"].append(f"egress refused: {', '.join(new)} (not in ops/egress-allowlist)")
+            save_state(node.id, state)
         text = handoff_file.read_text() if handoff_file.exists() else ""
         if not text and LAST_AGENT_ERROR:
             # Retrying cannot help while the API refuses every call.
