@@ -1,7 +1,7 @@
 # Talent Scout: cara kerja saya dengan AI agent
 
 Dokumen ini menjelaskan alur dari saya (manusia) sampai ke AI agent:
-- loop-graph yang menjalankan pekerjaan;
+- node graph dan node loop yang menjalankan pekerjaan;
 - sandbox tempat agent bekerja;
 - kerja sama antar agent: lead agent, orchestrator (kode), client agent, server agent, reviewer dan verifier.
 
@@ -67,9 +67,10 @@ flowchart LR
 
 1. Saya menyampaikan ide atau masalah ke lead agent.
 2. Lead agent membaca kode, mencari celahnya, lalu bertanya balik sampai semua keputusan jelas (skill `grilling`).
-3. Untuk UI, mockup dibuat di design canvas bersama. Setelah saya setujui, spesifikasinya diposting di issue.
-4. Perubahan kontrak (API, events, PRD) harus lewat issue `contract-change` yang saya setujui.
-5. Rencana yang sudah disepakati dipecah menjadi issue. Setiap issue adalah satu node dengan blok:
+3. Keputusan yang sulit dibalik dicatat sebagai **ADR** di `docs/adr/`: konteksnya, pilihan lain yang ditolak, dan konsekuensinya. Istilah yang baru disepakati dibakukan di `GLOSSARY.md` (skill `domain-modeling`). Agent membaca keduanya, jadi agent berikutnya tidak "memperbaiki" keputusan yang memang disengaja.
+4. Untuk UI, mockup dibuat di design canvas bersama. Setelah saya setujui, spesifikasinya diposting di issue.
+5. Perubahan kontrak (API, events, PRD) harus lewat issue `contract-change` yang saya setujui.
+6. Rencana yang sudah disepakati dipecah menjadi issue. Setiap issue adalah satu node dengan blok:
 
 ```yaml
 fence: [src/routes/s/*, tests/e2e/*]   # path yang boleh diubah
@@ -77,7 +78,7 @@ blocked_by: [server#81]               # dependensi yang nyata
 checks: [pnpm test]                   # bukti
 ```
 
-`ops/next` menghitung dari GitHub node mana yang siap: gap dijalankan dulu, lalu node yang membuka blokir paling banyak. Status tidak disimpan di dokumen.
+**Node graph:** `ops/next` menghitung dari GitHub node mana yang siap: gap dijalankan dulu, lalu node yang membuka blokir paling banyak. Status tidak disimpan di dokumen.
 
 Kalau agent menemukan blocker di luar fence-nya, ia berhenti dengan `STATUS: gap`. Token agent tidak bisa membuat issue, jadi ia menulis draf issue gap di handoff. Orchestrator hanya memblokir node pada issue gap yang benar-benar ada dan masih open, tidak pernah pada node itu sendiri (#21). Kalau belum ada, node dieskalasi dan saya yang mengajukan draf itu atau memperluas fence.
 
@@ -92,7 +93,7 @@ flowchart LR
   classDef gap fill:#fff6ec,stroke:#ffa64d,stroke-dasharray:5 5
 ```
 
-## C. Loop di dalam satu node
+## C. Node loop: di dalam satu node
 
 ```mermaid
 flowchart TB
@@ -149,6 +150,7 @@ flowchart TB
 - **Env:** hanya variabel toolchain yang di-allowlist yang diteruskan, lewat env file, bukan argumen. Database URL, API key, token dan socket saya dibuang, dan `.env` berisi secret server tidak pernah di-copy ke worktree.
 - **Identitas:** token fine-grained milik agent hanya punya akses Issues. Config `gh` agent kosong, dan git ke github.com dialihkan ke HTTPS dengan token agent. Jadi GitHub sendiri yang menolak push mereka.
 - **Batas run:** budget, timeout, jumlah percobaan, serta CPU, memori dan jumlah proses container diatur di `ops/tiers.yaml`. Reviewer hanya boleh membaca (Read/Glob/Grep untuk Claude, agent `plan` untuk OpenCode), dan folder kerjanya di-mount sebagai overlay yang tulisannya dibuang.
+- **Kenapa Podman rootless** (ADR 0003): tanpa daemon root, jadi tidak ada socket root yang bisa bocor ke agent. Docker Desktop bergantung pada aplikasi Windows, dan bubblewrap tidak bisa membuat allowlist jaringan dengan rapi.
 - **Jaringan:** sandbox hanya berada di jaringan Podman internal. Satu-satunya jalan keluar adalah proxy `ts-egress` dengan allowlist host persis. DNS ke luar tidak bisa, dan setiap koneksi tercatat per node.
 - **Git:** agent commit di clone miliknya sendiri. Commit dibawa ke worktree saya sebagai bundle, dengan hook dimatikan.
 - **Terbukti di pilot (4 node, kedua agent, tier 1–3):** `ops/run --check-sandbox` memeriksa semua dinding dari dalam image sebelum setiap sesi.
@@ -240,14 +242,14 @@ flowchart LR
 > Sebelum saya memercayai sandbox untuk AI agent saya, saya membiarkannya gagal dulu.
 >
 > Talent Scout dibangun oleh satu manusia dan satu tim AI agent. Setiap agent bekerja di container rootless:
-> - di dalam clone miliknya sendiri, sehingga repo saya, home saya dan secret saya tidak terlihat;
+> - di Podman rootless, di dalam clone miliknya sendiri, sehingga repo saya, home saya dan secret saya tidak terlihat;
 > - di jaringan internal, dengan proxy yang hanya mengizinkan host tertentu dan mencatat setiap koneksi;
 > - dengan token GitHub yang tidak bisa push.
 >
 > Sebelum sandbox itu jadi satu-satunya jalan, saya menjalankannya pada empat pekerjaan sungguhan sebagai pilot. Pilot itu menemukan empat bug di sandbox-nya sendiri: agent yang crash saat start, log yang tidak lengkap, reviewer yang tidak bisa jalan, dan tugas yang menunggu dirinya sendiri. Keempatnya diperbaiki dan kini dijaga test.
 >
 > Cara kerjanya:
-> 🧭 Lead agent (Claude Code) menyusun rencana bersama saya dan memecahnya menjadi issue berpagar
+> 🧭 Lead agent (Claude Code) menyusun rencana bersama saya, mencatat setiap keputusan besar sebagai ADR, lalu memecahnya menjadi issue berpagar
 > 🔁 Orchestrator, kode biasa dan bukan LLM, menjalankan gate
 > 🛠️ Claude Code membangun client, OpenCode membangun server
 > 🔍 Masing-masing di-review oleh agent yang lain, lalu verifier menyabotase test-nya
@@ -264,14 +266,14 @@ flowchart LR
 > Before I trusted a sandbox for my AI agents, I let it fail first.
 >
 > Talent Scout is built by one human and a team of AI agents. Every agent works in a rootless container:
-> - inside its own clone, so my repositories, home and secrets are invisible to it;
+> - in rootless Podman, inside its own clone, so my repositories, home and secrets are invisible to it;
 > - on an internal network, behind a proxy that allows exact hosts and logs every connection;
 > - with a GitHub token that cannot push.
 >
 > Before the sandbox became the only way to run, I put it through a pilot on four real tasks. The pilot found four bugs in the sandbox itself: an agent that crashed at start, an incomplete log, a reviewer that could not run, and a task left waiting on itself. All four are fixed and now guarded by tests.
 >
 > How the work flows:
-> 🧭 A lead agent (Claude Code) plans with me and turns ideas into fenced issues
+> 🧭 A lead agent (Claude Code) plans with me, records every major decision as an ADR, and turns ideas into fenced issues
 > 🔁 An orchestrator, plain code and not an LLM, runs the gates
 > 🛠️ Claude Code builds the client, OpenCode builds the server
 > 🔍 Each is reviewed by the other agent, then a verifier sabotages the tests

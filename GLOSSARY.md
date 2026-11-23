@@ -34,6 +34,18 @@ _Avoid_: QA agent, tester
 One GitHub issue carrying a fence, its real dependencies and its checks; the unit the orchestrator runs.
 _Avoid_: task, ticket, job
 
+**Node graph**:
+The dependency graph of open nodes, computed from GitHub (`blocked_by`); it decides which node is ready next.
+_Avoid_: loop-graph, task graph, backlog
+
+**Node loop**:
+The cycle inside one node: write the checks and see them fail, implement, gate, and retry or escalate.
+_Avoid_: loop-graph, iteration
+
+**AI graph**:
+The product's own graph of model and code nodes that interviews and scores an applicant; it lives in the server, not in the control plane.
+_Avoid_: loop-graph, agent graph (when the product is meant)
+
 **Fence**:
 The set of paths a node may change.
 _Avoid_: scope, allowlist
