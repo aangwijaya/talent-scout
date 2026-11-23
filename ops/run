@@ -279,9 +279,22 @@ def escalate(node, reason, feedback_text=""):
     print(f"{node.id}: escalated: {reason}")
 
 
+def open_issue(key):
+    repo, _, number = key.partition("#")
+    try:
+        return gh("issue", "view", number, "-R", REPOS[repo], "--json", "state", "--jq", ".state").strip() == "OPEN"
+    except RuntimeError:
+        return False
+
+
 def add_gaps(node, gaps):
-    """Add gap issues as blockers, so the graph reschedules this node after them."""
-    ids = re.findall(r"(?:client|server)#\d+", gaps)
+    """Add gap issues as blockers, so the graph reschedules this node after them. Only ids of real, open
+    issues other than this node count: an agent that could not file its gap writes a draft, and a draft
+    naming this node once made it wait on itself (pilot client#12)."""
+    found = dict.fromkeys(re.findall(r"(?:client|server)#\d+", gaps))
+    ids = [key for key in found if key != node.id and open_issue(key)]
+    if not ids:
+        return []
     current = node.block.get("blocked_by", [])
     merged = ", ".join(dict.fromkeys(current + ids))
     body = re.sub(r"^blocked_by:.*$", f"blocked_by: [{merged}]", node.body, flags=re.M)
@@ -378,7 +391,9 @@ def process(node, cfg):
         if status == "gap":
             post_handoff(node, text)
             if not add_gaps(node, fields.get("GAPS", "")):
-                return escalate(node, "STATUS: gap without a valid gap issue id")
+                # The draft goes to the human, who can file it; the node is not rewritten.
+                return escalate(node, "STATUS: gap without an open gap issue; file the draft below or widen the fence",
+                                fields.get("GAPS", "")[:1500])
             set_status(node, "status:todo")
             return print(f"{node.id}: parked behind {fields.get('GAPS')}")
         if status == "needs_human":
