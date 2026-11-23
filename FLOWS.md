@@ -8,7 +8,7 @@ Dokumen ini menjelaskan alur dari saya (manusia) sampai ke AI agent:
 Alur aplikasinya sendiri ada di bagian akhir sebagai pelengkap.
 
 **Slide siap posting**
-- `media/linkedin-workflow/` (utama, 9 slide): `slide-01.png` … `slide-08.png` berukuran 1080×1350, plus `talent-scout-agent-workflow.pdf` untuk post dokumen (carousel PDF) LinkedIn.
+- `media/linkedin-workflow/` (utama, 9 slide): `slide-01.png` … `slide-09.png` berukuran 1080×1350, plus `talent-scout-agent-workflow.pdf` untuk post dokumen (carousel PDF) LinkedIn.
 - `media/linkedin/` (opsional, 7 slide tentang produk): bisa dipakai untuk post kedua.
 
 Untuk me-render ulang: `node media/render-slides.mjs linkedin-workflow talent-scout-agent-workflow.pdf`.
