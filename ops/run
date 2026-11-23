@@ -26,7 +26,7 @@ import importlib.util
 import container
 from checks import feedback, gate, saw_key
 from lib import (AGENT_LOGIN_KEEP, AGENTS, HANDOFF_DIR, HANDOFF_MARK, OPS, PROXY_ENV_KEEP, REPOS, ROOT, STATE,
-                 STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, check_env, config, gh, handoff_path, load_nodes,
+                 STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, config, gh, handoff_path, load_nodes,
                  load_state, parse_handoff, save_state, sh, state_path, with_egress)
 
 _loader = importlib.machinery.SourceFileLoader("brief", str(OPS / "brief"))
@@ -129,18 +129,15 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     global LAST_AGENT_ERROR, LAST_EGRESS_REFUSED
     LAST_AGENT_ERROR, LAST_EGRESS_REFUSED = None, []
     HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
-    boxed = container.mode(cfg) == "container"
+    container.mode(cfg)
     repo = Path(wt).name.split("-")[0]
-    work = wt  # where the agent works: the human's worktree on the host, its own clone in the sandbox
-    if boxed:
-        container.require_image(repo)  # fail closed before anything starts
-        container.ensure_egress(cfg)
-        work = container.ensure_clone(wt)
+    container.require_image(repo)  # fail closed before anything starts
+    container.ensure_egress(cfg)
+    work = container.ensure_clone(wt)  # the agent works in its own clone, never the human's worktree
     if agent == "claude":
-        claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
         tools = ["Read", "Glob", "Grep"] if read_only else CLAUDE_TOOLS
-        dirs = [str(HANDOFF_DIR)] + ([go_mod_cache()] if not boxed or repo == "server" else [])
-        cmd = ["claude" if boxed else claude, "-p", "--model", cfg["claude_model"], "--effort", cfg["claude_effort"],
+        dirs = [str(HANDOFF_DIR)] + ([go_mod_cache()] if repo == "server" else [])
+        cmd = ["claude", "-p", "--model", cfg["claude_model"], "--effort", cfg["claude_effort"],
                "--max-budget-usd", str(cfg["budget_usd"]), "--no-session-persistence",
                "--add-dir", *dirs, "--allowedTools", *tools]
         if not read_only:
@@ -163,18 +160,16 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
         gh_config.mkdir()
         env = agent_env(work, gh_config)
         env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"permission": {"external_directory": outside}})
-        box_name = None
-        if boxed:
-            if agent == "claude":
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = container.claude_token()
-            home = stack.enter_context(container.agent_home())
-            env_path = stack.enter_context(container.env_file({**container.container_env(env),
-                                                               **container.cache_env(repo)}))
-            mounts = container.agent_mounts(work, read_only, HANDOFF_DIR, home) + container.cache_mounts(repo)
-            box_name = f"ts-{agent}-{Path(wt).name}-{int(time.time())}"
-            cmd = container.podman_argv(repo, cfg, work, cmd, env_path, mounts=mounts, read_only=read_only,
-                                        name=box_name)
-            env = dict(os.environ)  # for podman itself; the agent sees only the env file
+        if agent == "claude":
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = container.claude_token()
+        home = stack.enter_context(container.agent_home())
+        env_path = stack.enter_context(container.env_file({**container.container_env(env),
+                                                           **container.cache_env(repo)}))
+        mounts = container.agent_mounts(work, read_only, HANDOFF_DIR, home) + container.cache_mounts(repo)
+        box_name = f"ts-{agent}-{Path(wt).name}-{int(time.time())}"
+        cmd = container.podman_argv(repo, cfg, work, cmd, env_path, mounts=mounts, read_only=read_only,
+                                    name=box_name)
+        env = dict(os.environ)  # for podman itself; the agent sees only the env file
         out = Path(tmp, "out")
         # The prompt goes through stdin: one argv string is capped at 128 KiB, and a review prompt
         # carries the whole diff.
@@ -218,14 +213,13 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
                     cost = f", ${seen['cost']:.2f}" if agent == "opencode" else ""
                     print(f"  {agent} working, {elapsed // 60} min{cost} (tail -f {log_path})", flush=True)
     LAST_AGENT_ERROR = seen.get("error")
-    if boxed:
-        refused = LAST_EGRESS_REFUSED = container.save_egress_log(Path(wt).name, started)
-        if refused:
-            print(f"  egress refused for {Path(wt).name}: {', '.join(refused)} (ops/.state/egress/)", flush=True)
-        if not read_only:
-            # The gate, the push and the review read the human's worktree; the agent's commits come
-            # back as a bundle with hooks off. Uncommitted changes in the clone stay there.
-            container.import_agent_commits(work, wt, repo, cfg)
+    refused = LAST_EGRESS_REFUSED = container.save_egress_log(Path(wt).name, started)
+    if refused:
+        print(f"  egress refused for {Path(wt).name}: {', '.join(refused)} (ops/.state/egress/)", flush=True)
+    if not read_only:
+        # The gate, the push and the review read the human's worktree; the agent's commits come
+        # back as a bundle with hooks off. Uncommitted changes in the clone stay there.
+        container.import_agent_commits(work, wt, repo, cfg)
     return child.returncode, "\n".join(seen["text"])
 
 
@@ -238,25 +232,19 @@ def prepare(node):
         sh(["git", "worktree", "add", "-q", str(wt), "-b", f"node/{node.number}-{slug}",
             "--no-track", "origin/main"], cwd=checkout)
         cfg = config()
-        if container.mode(cfg) == "container":
-            container.ensure_clone(wt)
+        container.ensure_clone(wt)
         if node.repo == "client":
             # The client build reads its local, non-production values from .env. Nothing the server agent
             # runs reads .env (config and the live tests use the process env), so its secrets stay out.
+            # The checks run in the worktree and the agent works in its clone: both need it, and both
+            # get their dependencies installed in the sandbox.
             agent_env = OPS / "env" / "client.env.agent"
-            boxed = container.mode(cfg) == "container"
-            # The checks run in the worktree; in the sandbox the agent works in its clone. Both need these.
-            targets = [wt] + ([container.clone_path(wt)] if boxed else [])
-            for target in targets:
+            for target in (wt, container.clone_path(wt)):
                 if agent_env.exists():
                     shutil.copy2(agent_env, target / ".env")
-            if boxed:
-                for target in targets:
-                    done = container.run_code("pnpm install --frozen-lockfile", str(target), "client", cfg, timeout=600)
-                    if done.returncode:
-                        raise RuntimeError(f"pnpm install in the sandbox: {done.stderr.strip()[-500:]}")
-            else:
-                sh(["pnpm", "install", "--frozen-lockfile"], cwd=wt, timeout=600, env=check_env())
+                done = container.run_code("pnpm install --frozen-lockfile", str(target), "client", cfg, timeout=600)
+                if done.returncode:
+                    raise RuntimeError(f"pnpm install in the sandbox: {done.stderr.strip()[-500:]}")
     return wt
 
 
@@ -500,7 +488,7 @@ def check_agent_auth():
 
 def check_sandbox(repos=REPOS):
     """Prove the sandbox walls from inside each image (ADR 0002). PENDING walls arrive in later stages."""
-    cfg = {**config(), "sandbox": "container"}
+    cfg = config()
     ok = True
     for repo in repos:
         try:
@@ -525,10 +513,10 @@ def main():
     cfg = config()
     if "--reconcile" in argv:
         return reconcile(load_nodes(ttl=0), repo)
-    if container.mode(cfg) == "container":
-        # Before the first node of a session, the walls must hold; otherwise nothing runs.
-        if check_sandbox([repo] if repo else list(REPOS)):
-            raise SystemExit("sandbox check failed; see above. Nothing ran.")
+    container.mode(cfg)
+    # Before the first node of a session, the walls must hold; otherwise nothing runs.
+    if check_sandbox([repo] if repo else list(REPOS)):
+        raise SystemExit("sandbox check failed; see above. Nothing ran.")
     while not STOP_FILE.exists():
         # Only the client runner owns the contract pin; exit 1 is drift, other codes are errors.
         if (repo or (only or "").split("#")[0]) != "server" and sh([str(OPS / "contract-sync"), "--check"], check=False).returncode == 1:

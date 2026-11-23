@@ -1,12 +1,12 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # All agent code runs in a fail-closed sandbox
 
 The sandbox defends against both accidents and prompt injection that tries to exfiltrate data. It wraps the worker and the reviewer, and also every command the orchestrator runs on code from a worktree: green checks, the red check and dependency installs. Before this decision those commands ran on the host with the human's full environment, which was a larger hole than the agent session itself. The lead agent and the verifier stay outside, because they work through Claude Code's own permission harness with the human present.
 
-If the sandbox cannot start, the node stops with a clear error and nothing runs on the host. A `sandbox: host | container` flag exists only for the pilot, and host mode is removed after it.
+If the sandbox cannot start, the node stops with a clear error and nothing runs on the host. The pilot ran with a `sandbox: host | container` flag; since it ended, container is the only mode and a leftover `sandbox: host` stops the run.
 
 ## Consequences
 
@@ -36,3 +36,27 @@ If the sandbox cannot start, the node stops with a clear error and nothing runs 
   A test database for agents would be a separate, later decision that adds its host to the allowlist.
 - The agent CLIs' logins are mounted minimally and read-only, and model keys used inside the sandbox have spend caps, so a leaked token has a bounded cost.
 - Outside the sandbox the orchestrator keeps only `git` (diff, fetch, push) and `gh`, using the human's login.
+
+## Pilot result (2026-11-23)
+
+Four nodes ran in the sandbox:
+
+| Node | Agent | Tier |
+|---|---|---|
+| server#92 | OpenCode | 1 |
+| client#88 | Claude | 2 |
+| server#93 | OpenCode, with a Claude reviewer in the sandbox | 3 |
+| client#12 | Claude | 2, UI |
+
+All four exit criteria held:
+- Green checks matched CI on every PR.
+- `--check-sandbox` passed every session.
+- No egress refusal was left unexplained. The only refused host was the probe's `example.com`, and `models.opencode.ai` was added to the allowlist on purpose.
+- Run time stayed within the limit. The agent runs dominate a node's time, and the gate's checks cost about 10 s more in a fresh worktree, because the module's own packages compile again (`-trimpath` breaks tests that find fixtures through source paths).
+
+The pilot found and fixed four problems:
+- agent state dirs under root-owned parents (#18);
+- a proxy log that left out allowed connections (#19);
+- a read-only reviewer mount that OpenCode could not start on (#20);
+- a gap draft that made a node wait on itself (#21).
+

@@ -13,6 +13,7 @@ from pathlib import Path
 OPS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(OPS))
 import container
+import fakes
 import lib
 
 # Tests never write the real proxy config or logs under ops/.state.
@@ -22,36 +23,16 @@ CFG = {"sandbox": "container", "sandbox_cpus": 4, "sandbox_memory": "6g", "sandb
 
 
 def fake_podman(tmp, image_exists=True):
-    """A podman that records its argv and, for `run`, executes the command after the image tag."""
-    log = Path(tmp, "podman.log")
-    script = Path(tmp, "podman")
-    script.write_text(f"""#!/bin/sh
-echo "$@" >> {log}
-if [ "$1 $2" = "image exists" ]; then exit {0 if image_exists else 1}; fi
-case " $* " in *" run -d "*) exit 0 ;; esac
-if [ "$1" = "ps" ]; then exit 0; fi
-if [ "$1" = "logs" ]; then cat {tmp}/proxy.log 2>/dev/null; exit 0; fi
-if [ "$1" = "run" ]; then
-  envfile="" workdir=""
-  while [ "$#" -gt 0 ] && [ "$1" != "{container.image_tag('server')}" ] && [ "$1" != "{container.image_tag('client')}" ]; do
-    [ "$1" = "--env-file" ] && envfile=$2
-    [ "$1" = "-w" ] && workdir=$2
-    shift
-  done
-  shift
-  # Like podman: the command sees only the env file, plus a PATH to find tools.
-  [ -n "$workdir" ] && cd "$workdir"
-  exec env -i PATH="$PATH" sh -c 'set -a; . "$0"; set +a; exec "$@"' "$envfile" "$@"
-fi
-exit 0
-""")
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    return script, log
+    missing = () if image_exists else tuple(container.image_tag(r) for r in ("client", "server", "egress"))
+    return fakes.fake_podman(tmp, missing=missing)
 
 
 class Mode(unittest.TestCase):
-    def test_host_is_the_default_during_the_pilot(self):
-        self.assertEqual(container.mode({}), "host")
+    def test_container_is_the_only_mode(self):
+        self.assertEqual(container.mode({}), "container")
+        with self.assertRaises(container.SandboxError) as err:
+            container.mode({"sandbox": "host"})
+        self.assertIn("removed after the pilot", str(err.exception))
 
     def test_an_unknown_mode_is_refused(self):
         with self.assertRaises(container.SandboxError):
@@ -197,10 +178,11 @@ class RunCode(unittest.TestCase):
             names = {l.split("=", 1)[0] for l in Path(wt, "env.txt").read_text().splitlines()}
         self.assertNotIn("OPENROUTER_API_KEY", names)
 
-    def test_host_mode_never_calls_podman(self):
+    def test_a_leftover_host_setting_runs_nothing(self):
         with tempfile.TemporaryDirectory() as wt:
-            lib.run_code("true", wt, "server", {"sandbox": "host"})
-        self.assertFalse(self.log.exists())
+            with self.assertRaises(container.SandboxError):
+                lib.run_code(f"touch {wt}/ran", wt, "server", {"sandbox": "host"})
+            self.assertFalse(Path(wt, "ran").exists())
 
     def test_container_mode_without_an_image_runs_nothing(self):
         container.PODMAN, self.log = fake_podman(self.tmp.name, image_exists=False)
@@ -256,23 +238,7 @@ class WarmCache(unittest.TestCase):
 
 
 def git_worktree(root, name="server-9"):
-    """A human repository with origin/main and a node worktree, like prepare() makes; clones go under root."""
-    root = Path(root)
-    checkout = root / f"talent-scout-{name.split('-')[0]}"
-    if not checkout.exists():
-        checkout.mkdir(parents=True)
-        for args in (("init", "-q", "-b", "main"), ("config", "user.email", "h@example.com"), ("config", "user.name", "h")):
-            subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
-        (checkout / "a.txt").write_text("base\n")
-        subprocess.run(["git", "add", "-A"], cwd=checkout, check=True, capture_output=True)
-        subprocess.run(["git", "commit", "-qm", "base"], cwd=checkout, check=True, capture_output=True)
-        subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=checkout, check=True)
-    wt = root / "wt" / name
-    if not wt.exists():
-        subprocess.run(["git", "worktree", "add", "-q", str(wt), "-b", f"node/{name}", "--no-track", "origin/main"],
-                       cwd=checkout, check=True, capture_output=True)
-    container.CLONES = root / "clones"
-    return wt
+    return fakes.git_worktree(root, name)
 
 
 class AgentInBox(unittest.TestCase):

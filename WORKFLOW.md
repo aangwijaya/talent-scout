@@ -110,27 +110,28 @@ Like the planning skills, they need a human, so a headless agent must never load
 - `ops/env/client.env.agent` and `ops/env/server.env.agent`: agent credentials only, pointing at a separate Supabase project, with `LLM_MODE=fake` and `EMAIL_MODE=log`. They are gitignored.
 - Required status checks on `main`: client `checks` and `contract`, server `test`.
 
-## Sandbox (being built)
+## Sandbox
 
-Agents, reviewers and every command that runs code from a worktree are moving into a fail-closed sandbox: rootless Podman, an egress allowlist proxy, a per-node agent clone and a read-only warm cache. Until the pilot ends, `sandbox: host | container` in `ops/tiers.yaml` picks the mode. Host mode is removed after the pilot, and container mode never falls back to the host. The reasons are in `docs/adr/0002` to `0005`, and the vocabulary is in `GLOSSARY.md`.
+Every agent run (worker and reviewer), and every command the orchestrator runs on code from a worktree (green checks, the red check, dependency installs), runs in rootless Podman. Container is the only mode, and it fails closed: if anything below is missing, nothing runs on the host. The reasons are in `docs/adr/0002` to `0005`, and the vocabulary is in `GLOSSARY.md`.
 
-Stages, each its own PR to this repo:
-1. Keep the server's agent secrets out of its worktree, and run green and red checks and installs with a filtered environment.
-2. Podman images (`ops/images/Containerfile`, built with `ops/sandbox build`), runtime and limits, and `ops/run --check-sandbox`.
-3. Egress proxy with the allowlist and per-node logs. Refusals are surfaced in the handoff and `ops/triage`.
-4. Agent clone, with commits fetched into the human's repository with hooks disabled.
-5. Pilot on two nodes per repo, then remove host mode.
+What an agent **can** do:
+- read and change its own clone (`ops/.state/clones/<repo>-<N>`), commit there, and run go, pnpm, git, gh and rg;
+- reach the hosts in `ops/egress-allowlist`, through the `ts-egress` proxy only;
+- read and write issues with its own GitHub token.
 
-Stages 1–4 are merged. **Pilot (stage 5):** `sandbox: container` is on. The pilot nodes are client#12, client#88, server#92 and server#93. Before the first node of a session, `ops/run` runs `--check-sandbox` and stops if any wall fails.
+What it **cannot** do:
+- see your home directory, `ops/env`, your SSH key, your gh or git config, or either of your repositories;
+- reach any other host, resolve outside names, or push;
+- use more than its limits (`sandbox_cpus`, `sandbox_memory` and `sandbox_pids` in `ops/tiers.yaml`, plus `timeout_min` and `budget_usd`).
 
-What the pilot needs:
-- the images, built with `ops/sandbox build`;
-- the Claude token in `ops/env/claude.oauth-token` (from `claude setup-token`, mode 600);
-- a spend cap on the OpenCode key.
+Its commits come back as a git bundle, fetched into your worktree with hooks off.
 
-To go back, set `sandbox: host`. Host mode is removed when the four exit criteria in ADR 0002 hold.
-
-Once stage 5 lands, this section will say what an agent can and cannot do, how to build images, and how to add an allowlisted host.
+Day to day:
+- `ops/sandbox build` rebuilds the client, server and egress images and warms the Go build cache. Run it after you change `ops/images/Containerfile`. The orchestrator refuses an image whose tag does not match the file.
+- `ops/sandbox warm` refills the Go build cache from `main`, for example after a large dependency change.
+- `ops/run --check-sandbox` proves the walls from inside each image. `ops/run` also runs it before the first node of every session.
+- A refused host shows up in the node's `ops/.state/egress/<node>.log`, in the handoff's `EGRESS` field and in `ops/triage`. To allow it, add the exact host to `ops/egress-allowlist` in a reviewed PR. The proxy picks up the change on its next start.
+- The Claude agent needs `ops/env/claude.oauth-token` (from `claude setup-token`, mode 600). OpenCode uses a throwaway copy of its login, with a spend cap on the subscription.
 
 ## Agent GitHub token
 

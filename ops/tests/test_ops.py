@@ -15,11 +15,20 @@ from pathlib import Path
 OPS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(OPS))
 import checks
+import container
+import fakes
 import lib
+from fakes import git_worktree
 
 
 FIXTURE_DIR = tempfile.mkdtemp(prefix="ops-tests-")
 FAKE_AGENT_TOKEN = "github_pat_" + "x" * 40
+
+
+def setUpModule():
+    # Every agent run and check goes through the sandbox (ADR 0002): here, a podman double that runs
+    # the command on the host with only its env file, and clones and proxy files under a temp dir.
+    fakes.sandbox_for_tests(tempfile.mkdtemp(prefix="ops-sandbox-"))
 
 
 def load_script(name):
@@ -169,8 +178,7 @@ class Gate(unittest.TestCase):
 
     def run_gate(self, block=RED_BLOCK, labels=(), handoff=GOOD_HANDOFF, repo="server"):
         n = node(1, repo=repo, labels=labels, block=block)
-        # These tests are about the gate itself; the host mode keeps them independent of Podman.
-        return checks.gate(n, self.wt, {**lib.config(), "sandbox": "host"}, handoff, run_green=False)
+        return checks.gate(n, self.wt, lib.config(), handoff, run_green=False)
 
     def failed(self, result):
         return {f["check"] for f in result["failures"]}
@@ -317,7 +325,7 @@ class KillSwitch(unittest.TestCase):
             started = time.time()
             try:
                 with self.assertRaises(run.Stop):
-                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "budget_usd": 1, "opencode_model": "fake/model"})
+                    run.run_agent("opencode", "p", git_worktree(tmp), {"timeout_min": 5, "budget_usd": 1, "opencode_model": "fake/model"})
             finally:
                 os.environ["PATH"], run.STOP_FILE = old_path, old_stop
             self.assertLess(time.time() - started, 15)
@@ -337,7 +345,7 @@ class KillSwitch(unittest.TestCase):
             threading.Timer(1, run.STOP_FILE.touch).start()
             try:
                 with self.assertRaises(run.Stop):
-                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "budget_usd": 1, "opencode_model": "fake/model"})
+                    run.run_agent("opencode", "p", git_worktree(tmp), {"timeout_min": 5, "budget_usd": 1, "opencode_model": "fake/model"})
             finally:
                 os.environ["PATH"], run.STOP_FILE = old_path, old_stop
             time.sleep(5)
@@ -353,14 +361,15 @@ class KillSwitch(unittest.TestCase):
             os.environ["PATH"] = f"{tmp}:{old_path}"
             run.STATE = Path(tmp)
             try:
-                code, text = run.run_agent("opencode", "p", tmp, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "fake/model"})
+                code, text = run.run_agent("opencode", "p", git_worktree(tmp), {"timeout_min": 1, "budget_usd": 1, "opencode_model": "fake/model"})
             finally:
                 os.environ["PATH"] = old_path
             self.assertEqual((code, len(text)), (0, 300000))
 
     def test_opencode_runs_in_the_worktree_and_may_read_the_go_module_cache(self):
         run = load_script("run")
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt_root:
+            wt = git_worktree(wt_root)
             fake = Path(tmp, "opencode")
             fake.write_text('#!/bin/sh\necho "PWD=$PWD"\necho "ARGS=$*"\necho "CFG=$OPENCODE_CONFIG_CONTENT"\n')
             fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
@@ -371,8 +380,10 @@ class KillSwitch(unittest.TestCase):
                 _, text = run.run_agent("opencode", "p", wt, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "fake/model", "opencode_effort": "high"})
             finally:
                 os.environ["PATH"] = old_path
-            self.assertIn(f"PWD={wt}\n", text)
-            self.assertIn(f"--dir {wt}", text)
+            # The agent works in its own clone (ADR 0004), never the human's worktree.
+            clone = container.clone_path(wt)
+            self.assertIn(f"PWD={clone}\n", text)
+            self.assertIn(f"--dir {clone}", text)
             self.assertIn("--variant high", text)
             self.assertIn("--format json", text)
             cfg = json.loads(text.split("CFG=", 1)[1])
@@ -386,7 +397,8 @@ class KillSwitch(unittest.TestCase):
 
     def test_claude_uses_the_pinned_model_as_worker_and_reviewer(self):
         run = load_script("run")
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt_root:
+            wt = git_worktree(wt_root)
             fake = Path(tmp, "claude")
             fake.write_text('#!/bin/sh\necho "ARGS=$*"\n')
             fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
@@ -408,7 +420,8 @@ class KillSwitch(unittest.TestCase):
         run = load_script("run")
         prompt = "MARKER-START\n" + "x" * 200_000 + "\nMARKER-END"  # one argv string is capped at 128 KiB
         for agent in ("claude", "opencode"):
-            with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt:
+            with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt_root:
+                wt = git_worktree(wt_root)
                 fake = Path(tmp, agent)
                 fake.write_text('#!/bin/sh\necho "ARGC=$#"\nprintf "STDIN="; tail -c 10\necho\n')
                 fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
@@ -465,11 +478,11 @@ class KillSwitch(unittest.TestCase):
             old_path = os.environ["PATH"]
             os.environ["PATH"] = f"{tmp}:{old_path}"
             try:
-                code, text = run.run_agent("opencode", "p", tmp, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
+                code, text = run.run_agent("opencode", "p", git_worktree(tmp), {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
             finally:
                 os.environ["PATH"] = old_path
             self.assertEqual((code, text), (0, "done"))
-            self.assertIn("→ bash go test ./... [completed]", Path(tmp, Path(tmp).name + ".log").read_text())
+            self.assertIn("→ bash go test ./... [completed]", Path(tmp, "server-9.log").read_text())
 
     def test_an_opencode_api_error_is_logged_and_kept(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -479,12 +492,12 @@ class KillSwitch(unittest.TestCase):
             old_path = os.environ["PATH"]
             os.environ["PATH"] = f"{tmp}:{old_path}"
             try:
-                code, _ = run.run_agent("opencode", "p", tmp, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
+                code, _ = run.run_agent("opencode", "p", git_worktree(tmp), {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
             finally:
                 os.environ["PATH"] = old_path
             self.assertEqual(code, 1)
             self.assertEqual(run.LAST_AGENT_ERROR, "opencode APIError 402: Insufficient Balance")
-            self.assertIn("ERROR opencode APIError 402: Insufficient Balance", Path(tmp, Path(tmp).name + ".log").read_text())
+            self.assertIn("ERROR opencode APIError 402: Insufficient Balance", Path(tmp, "server-9.log").read_text())
 
     def test_a_clean_run_clears_the_last_agent_error(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -494,7 +507,7 @@ class KillSwitch(unittest.TestCase):
             old_path = os.environ["PATH"]
             os.environ["PATH"] = f"{tmp}:{old_path}"
             try:
-                run.run_agent("opencode", "p", tmp, {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
+                run.run_agent("opencode", "p", git_worktree(tmp), {"timeout_min": 1, "budget_usd": 1, "opencode_model": "m"})
             finally:
                 os.environ["PATH"] = old_path
             self.assertIsNone(run.LAST_AGENT_ERROR)
@@ -509,7 +522,7 @@ class KillSwitch(unittest.TestCase):
             started = time.time()
             try:
                 with self.assertRaisesRegex(run.Stop, "cost budget"):
-                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "budget_usd": 3, "opencode_model": "m"})
+                    run.run_agent("opencode", "p", git_worktree(tmp), {"timeout_min": 5, "budget_usd": 3, "opencode_model": "m"})
             finally:
                 os.environ["PATH"] = old_path
             self.assertLess(time.time() - started, 15)
@@ -525,7 +538,7 @@ class KillSwitch(unittest.TestCase):
             started = time.time()
             try:
                 with self.assertRaisesRegex(run.Stop, "no output for"):
-                    run.run_agent("opencode", "p", tmp, {"timeout_min": 5, "idle_min": 0.05, "budget_usd": 3,
+                    run.run_agent("opencode", "p", git_worktree(tmp), {"timeout_min": 5, "idle_min": 0.05, "budget_usd": 3,
                                                          "opencode_model": "m"})
             finally:
                 os.environ["PATH"] = old_path
@@ -640,6 +653,8 @@ class Reconcile(unittest.TestCase):
 
 
 class CheckEnv(Gate):
+    _saved_ensure_clone, _saved_run_code = staticmethod(container.ensure_clone), staticmethod(container.run_code)
+    _saved_clone_path = staticmethod(container.clone_path)
     """Sandbox stage 1: commands that run code from a worktree get the toolchain env, never secrets."""
     SECRETS = {"DATABASE_URL": "postgres://u:p@h/db", "OPENROUTER_API_KEY": "sk-or-fake",
                "GITHUB_TOKEN": "ghp_human", "GH_TOKEN": "github_pat_human", "SSH_AUTH_SOCK": "/tmp/agent.sock",
@@ -655,6 +670,8 @@ class CheckEnv(Gate):
         os.environ.clear()
         os.environ.update(self.saved)
         self.dump.unlink(missing_ok=True)
+        for name in ("ensure_clone", "run_code", "clone_path"):  # prepare() tests replace these
+            setattr(container, name, getattr(type(self), f"_saved_{name}"))
         super().tearDown()
 
     def names(self):
@@ -665,7 +682,9 @@ class CheckEnv(Gate):
         for name in self.SECRETS:
             self.assertNotIn(name, names)
         self.assertIn("PATH", names)
-        self.assertLessEqual(names - {"PWD", "SHLVL", "_", "OLDPWD"}, set(lib.CHECK_ENV_KEEP))
+        # Inside the sandbox: the translated check env, the warm caches and the shell's own variables.
+        allowed = set(container.container_env(lib.check_env())) | set(container.cache_env("server"))
+        self.assertLessEqual(names - {"PATH", "PWD", "SHLVL", "_", "OLDPWD"}, allowed)
 
     def test_green_commands_get_no_secrets(self):
         self.assertEqual(checks.run_commands([f"env > {self.dump}"], self.wt, "green"), [])
@@ -684,41 +703,49 @@ class CheckEnv(Gate):
             self.assertNotIn(name, env)
         self.assertEqual(env["PATH"], os.environ["PATH"])
 
-    def test_dependency_install_gets_no_secrets(self):
+    def prepare(self, repo, number):
+        """prepare() with git faked, recording what runs in the sandbox."""
         run = load_script("run")
-        calls = []
-        with tempfile.TemporaryDirectory() as root:
-            def fake_sh(cmd, cwd=None, timeout=None, check=True, env=None):
-                calls.append((cmd, env))
-                if cmd[:3] == ["git", "worktree", "add"]:
-                    Path(cmd[4]).mkdir(parents=True)
-                return subprocess.CompletedProcess(cmd, 0, "", "")
-            run.sh, run.ROOT, run.OPS = fake_sh, Path(root), Path(root, "ops")
-            run.config = lambda: {**lib.config(), "sandbox": "host"}
-            run.prepare(node(7, repo="client"))
-        install = [env for cmd, env in calls if cmd[:2] == ["pnpm", "install"]]
-        self.assertEqual(len(install), 1)
-        self.assertIsNotNone(install[0], "pnpm install must not inherit the human's env")
-        for name in self.SECRETS:
-            self.assertNotIn(name, install[0])
+        sandboxed = []
+        root = Path(tempfile.mkdtemp(prefix="prepare-"))
 
+        def fake_sh(cmd, cwd=None, timeout=None, check=True, env=None):
+            if cmd[:3] == ["git", "worktree", "add"]:
+                Path(cmd[4]).mkdir(parents=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    def test_only_the_client_worktree_gets_an_env_file(self):
+        def fake_clone(wt):
+            clone = root / "clones" / Path(wt).name
+            clone.mkdir(parents=True, exist_ok=True)
+            return clone
+
+        def fake_run_code(command, cwd, repo, cfg, timeout=None, extra_mounts=()):
+            sandboxed.append((command, cwd))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        run.sh, run.ROOT, run.OPS = fake_sh, root, root / "ops"
+        run.container.ensure_clone, run.container.run_code = fake_clone, fake_run_code
+        run.container.clone_path = lambda wt: root / "clones" / Path(wt).name
+        (root / "ops" / "env").mkdir(parents=True)
+        for name in ("client", "server"):
+            (root / "ops" / "env" / f"{name}.env.agent").write_text("SECRET=1\n")
+        return run.prepare(node(number, repo=repo)), root, sandboxed
+
+    def test_dependency_install_runs_in_the_sandbox_for_worktree_and_clone(self):
+        wt, root, sandboxed = self.prepare("client", 7)
+        self.assertEqual(sandboxed, [("pnpm install --frozen-lockfile", str(wt)),
+                                     ("pnpm install --frozen-lockfile", str(root / "clones" / "client-7"))])
+
+    def test_only_the_client_worktree_and_its_clone_get_an_env_file(self):
         # Nothing the server agent runs reads .env (config and live tests use the process env only), so
         # the server's agent secrets never enter its worktree. The client build needs its local values.
-        run = load_script("run")
-        with tempfile.TemporaryDirectory() as root:
-            def fake_sh(cmd, cwd=None, timeout=None, check=True, env=None):
-                if cmd[:3] == ["git", "worktree", "add"]:
-                    Path(cmd[4]).mkdir(parents=True)
-                return subprocess.CompletedProcess(cmd, 0, "", "")
-            run.sh, run.ROOT, run.OPS = fake_sh, Path(root), Path(root, "ops")
-            run.config = lambda: {**lib.config(), "sandbox": "host"}
-            Path(root, "ops", "env").mkdir(parents=True)
-            for repo in ("client", "server"):
-                Path(root, "ops", "env", f"{repo}.env.agent").write_text("SECRET=1\n")
-            self.assertTrue((run.prepare(node(7, repo="client")) / ".env").exists())
-            self.assertFalse((run.prepare(node(8, repo="server")) / ".env").exists())
+        wt, root, _ = self.prepare("client", 7)
+        self.assertTrue((wt / ".env").exists())
+        self.assertTrue((root / "clones" / "client-7" / ".env").exists())
+        wt, root, sandboxed = self.prepare("server", 8)
+        self.assertFalse((wt / ".env").exists())
+        self.assertEqual(sandboxed, [])
+
 
 class Gaps(unittest.TestCase):
     """A gap blocks the node only on a real, open issue other than the node itself (pilot client#12)."""
@@ -818,7 +845,8 @@ class AgentEnv(unittest.TestCase):
 
     def test_the_agent_process_sees_only_the_agent_env(self):
         run = load_script("run")
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as wt_root:
+            wt = git_worktree(wt_root)
             fake = Path(tmp, "opencode")
             fake.write_text("#!/bin/sh\nenv\n")
             fake.chmod(fake.stat().st_mode | stat.S_IEXEC)

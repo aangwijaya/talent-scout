@@ -20,6 +20,6 @@ if args[0] == "build":
 if args[0] in ("build", "warm"):
     for repo in repos:
         if repo in REPOS:
-            container.warm(repo, {**config(), "sandbox": "container"})
+            container.warm(repo, config())
 for repo in repos:
     print(container.image_tag(repo))

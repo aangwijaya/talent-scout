@@ -38,9 +38,10 @@ class SandboxError(Exception):
 
 
 def mode(cfg):
-    value = cfg.get("sandbox", "host")
-    if value not in ("host", "container"):
-        raise SandboxError(f"sandbox must be host or container in ops/tiers.yaml, not {value!r}")
+    """Container is the only mode since the pilot (ADR 0002). A leftover `sandbox: host` stops the run."""
+    value = cfg.get("sandbox", "container")
+    if value != "container":
+        raise SandboxError(f"sandbox: {value!r} is gone; host mode was removed after the pilot (ADR 0002)")
     return value
 
 

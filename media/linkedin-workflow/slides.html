@@ -214,11 +214,11 @@ svg text { font-family: Inter, sans-serif; }
         <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:23px;color:var(--violet)">3 · Its own identity</b><span class="mono" style="font-size:17px;color:var(--muted)">GitHub token: issues only</span></div>
         <div style="font-size:20px;color:var(--muted);margin-top:8px;line-height:1.4">No access to my gh login or SSH key. Git runs over HTTPS with the agent token, and <b style="color:var(--ink)">GitHub refuses its pushes (403)</b>.</div>
         <div style="margin-top:14px;border-radius:20px;border:2.5px solid #93b4ff;background:#f4f7ff;padding:22px 22px 24px">
-          <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:23px;color:var(--brand)">2 · A clean environment</b><span class="mono" style="font-size:17px;color:var(--muted)">allowlisted env vars</span></div>
-          <div style="font-size:20px;color:var(--muted);margin-top:8px;line-height:1.4">All other variables are dropped. It gets a separate Supabase project, <span class="mono">LLM_MODE=fake</span> and <span class="mono">EMAIL_MODE=log</span>.</div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:23px;color:var(--brand)">2 · A rootless container</b><span class="mono" style="font-size:17px;color:var(--muted)">Podman · no route out</span></div>
+          <div style="font-size:20px;color:var(--muted);margin-top:8px;line-height:1.4">Only allowlisted env vars, no capabilities, CPU and memory caps. The network is internal: the one way out is a proxy that allows exact hosts and logs every request.</div>
           <div style="margin-top:14px;border-radius:16px;border:2.5px solid #86efac;background:#f2fcf4;padding:22px 22px">
-            <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:23px;color:var(--success-text)">1 · A fenced worktree</b><span class="mono" style="font-size:17px;color:var(--muted)">one per node</span></div>
-            <div style="font-size:20px;color:var(--muted);margin-top:8px;line-height:1.4">It may change only the paths in its fence. Writes outside are denied, except its handoff file.</div>
+            <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:23px;color:var(--success-text)">1 · Its own clone</b><span class="mono" style="font-size:17px;color:var(--muted)">one per node</span></div>
+            <div style="font-size:20px;color:var(--muted);margin-top:8px;line-height:1.4">My repositories and home are invisible. Its commits come back as a bundle with hooks off, and the gate rejects anything outside the fence.</div>
             <div style="margin-top:14px;display:flex;align-items:center;gap:14px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 18px"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#145aff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></svg><span style="font-size:20px;font-weight:600;color:var(--ink)">Coding agent: writes tests and code, runs them</span></div>
           </div>
         </div>
@@ -229,7 +229,7 @@ svg text { font-family: Inter, sans-serif; }
     <div style="display:flex;gap:14px;align-items:center"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><b style="font-size:23px;color:var(--ink)">Outside the walls, only I hold these</b></div>
     <div style="font-size:21px;color:var(--muted);margin-top:8px;line-height:1.4">Production secrets and database · real model API keys · live-model test runs · migrations · push and merge.</div>
   </div>
-  <div class="foot"><span class="who">Talent Scout · build log</span><span class="mono" style="font-size:18px">sandbox stage 0 · egress proxy next</span></div>
+  <div class="foot"><span class="who">Talent Scout · build log</span><span class="mono" style="font-size:18px">rootless Podman · egress allowlist · agent clone</span></div>
 </section>
 
 <!-- 6 CROSS REVIEW -->
