@@ -720,6 +720,41 @@ class CheckEnv(Gate):
             self.assertTrue((run.prepare(node(7, repo="client")) / ".env").exists())
             self.assertFalse((run.prepare(node(8, repo="server")) / ".env").exists())
 
+class Gaps(unittest.TestCase):
+    """A gap blocks the node only on a real, open issue other than the node itself (pilot client#12)."""
+
+    def run_add(self, gaps, existing):
+        run = load_script("run")
+        edits = []
+
+        def fake_gh(*args):
+            if args[:2] == ("issue", "view"):
+                key = f"{'client' if args[4].endswith('client') else 'server'}#{args[2]}"
+                if key not in existing:
+                    raise RuntimeError("not found")
+                return "OPEN\n"
+            edits.append(args)
+            return ""
+        run.gh = fake_gh
+        n = node(12, repo="client", block="fence: [src/*]\nblocked_by: [client#10]\nchecks: []\n")
+        return run.add_gaps(n, gaps), edits
+
+    def test_a_draft_that_names_the_node_itself_blocks_nothing(self):
+        draft = "none filed (gh issue create denied). Body:\n```yaml\nblocked_by: [client#12]\n```"
+        ids, edits = self.run_add(draft, existing={"client#12"})
+        self.assertEqual(ids, [])
+        self.assertEqual(edits, [], "the node must not be rewritten to wait on itself")
+
+    def test_an_id_that_is_not_an_open_issue_blocks_nothing(self):
+        ids, edits = self.run_add("client#999", existing=set())
+        self.assertEqual((ids, edits), ([], []))
+
+    def test_a_real_gap_issue_becomes_a_blocker(self):
+        ids, edits = self.run_add("filed client#95 for the e2e fix", existing={"client#95"})
+        self.assertEqual(ids, ["client#95"])
+        self.assertIn("blocked_by: [client#10, client#95]", edits[0][-1])
+
+
 class AgentEnv(unittest.TestCase):
     """Sandbox stage 0: agents get an allowlisted env and their own GitHub token, never the human's."""
     SECRETS = {"DATABASE_URL": "postgres://u:p@h/db", "OPENROUTER_API_KEY": "sk-or-fake",
