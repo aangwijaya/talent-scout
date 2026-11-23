@@ -1,6 +1,6 @@
 # WORKFLOW: Talent Scout agent graph
 
-The only source for how work runs. App repos: `aangwijaya/talent-scout-client` (Claude) and `aangwijaya/talent-scout-server` (OpenCode). Design basis: harness says what an agent can do, the loop says what is true, the graph says what happens next.
+The only source for how work runs here. To set up the same architecture in another project, start from `BLUEPRINT.md`. App repos: `aangwijaya/talent-scout-client` (Claude) and `aangwijaya/talent-scout-server` (OpenCode). Design basis: harness says what an agent can do, the loop says what is true, the graph says what happens next.
 
 ## Daily commands
 
