@@ -146,7 +146,9 @@ flowchart TB
 - **Env:** hanya variabel di `AGENT_ENV_KEEP` yang diteruskan, misalnya PATH, HOME dan toolchain Go/pnpm. Database URL, API key, token dan socket saya dibuang.
 - **Identitas:** token fine-grained milik agent hanya punya akses Issues. Config `gh` agent kosong, dan git ke github.com dialihkan ke HTTPS dengan token agent. Jadi GitHub sendiri yang menolak push mereka.
 - **Batas run:** budget, timeout dan jumlah percobaan diatur di `ops/tiers.yaml`. Reviewer berjalan read-only: Read/Glob/Grep untuk Claude, dan agent `plan` untuk OpenCode.
-- **Berikutnya (sandbox stage 1):** egress proxy untuk membatasi akses jaringan agent.
+- **Jaringan:** sandbox hanya berada di jaringan Podman internal. Satu-satunya jalan keluar adalah proxy `ts-egress` dengan allowlist host persis. DNS ke luar tidak bisa, dan setiap koneksi tercatat per node.
+- **Git:** agent commit di clone miliknya sendiri. Commit dibawa ke worktree saya sebagai bundle, dengan hook dimatikan.
+- **Terbukti di pilot (4 node, kedua agent, tier 1–3):** `ops/run --check-sandbox` memeriksa semua dinding dari dalam image sebelum setiap sesi.
 
 ## E. Setelah merge
 

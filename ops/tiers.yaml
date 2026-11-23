@@ -20,8 +20,7 @@ review_timeout_min: 20
 idle_min: 10
 max_attempts: 3
 ci_wait_min: 20
-# Sandbox (ADR 0002): host during the pilot, then container only. Container mode never falls back.
-sandbox: container
+# Sandbox (ADR 0002): every agent run and every command on agent code runs in rootless Podman.
 sandbox_cpus: 4
 sandbox_memory: 6g
 sandbox_pids: 1024
