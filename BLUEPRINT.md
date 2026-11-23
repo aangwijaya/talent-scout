@@ -392,6 +392,33 @@ loop until ops/STOP exists:
 
 ---
 
+### 7.6 Using Docker instead of Podman
+
+Docker works. The choice of Podman (ADR 0003) was about **who runs the daemon and with what rights**, not about features. Use Docker only in one of these two modes:
+- **Rootless Docker** (`dockerd-rootless-setuptool.sh install`): the daemon runs as your user, so it is equivalent to rootless Podman. Take your user **out of the `docker` group** afterwards, so the root socket is never used.
+- **Docker Desktop** (macOS, Windows, WSL integration): its daemon is root inside its VM, and that VM can mount your files. Accept it only if the guards below hold.
+
+**Guards, whatever the mode:**
+- Never mount `/var/run/docker.sock` (or any runtime socket) into a sandbox. Never pass `DOCKER_HOST`, `DOCKER_CONFIG` or `CONTAINER_HOST` into the agent env.
+- Add one probe line: the socket path and `DOCKER_HOST` must be absent inside the sandbox.
+- With a rootful daemon, anyone who can reach the socket is root on the machine. That is the whole reason this blueprint defaults to rootless.
+
+**What changes in `container.py`.** Keep one variable (`RUNTIME = "podman" | "docker"`, set in `tiers.yaml` as `sandbox_runtime`) and a small adapter:
+
+| Need | Podman (as built) | Docker |
+|---|---|---|
+| Run as your user | `--userns=keep-id` | Rootless Docker maps container root to your user, so just run as root inside. With a rootful daemon, use `--user $(id -u):$(id -g)` and pre-create `HOME` as a tmpfs owned by that uid. |
+| Discardable overlay mount (warm caches, reviewer dir) | `-v src:dst:O` | No `:O`. A read-only module cache fails as soon as the build needs a module that isn't in it, so either copy the warm cache into a per-run volume or tmpfs at start, or mount it `:ro` and set a second, throwaway cache path for new downloads. Delete the per-run volume afterwards. For the reviewer, mount the clone `:ro` and put a tmpfs over the paths the CLI writes (`--tmpfs <clone>/.opencode`). |
+| Image exists | `podman image exists TAG` | `docker image inspect TAG >/dev/null` |
+| Labels on `ps` | prints `map[k:v]` | `docker ps --filter name=^x$ --format '{{.Label "k"}}'` |
+| Internal network | `podman network create --internal` | `docker network create --internal` (same idea) |
+| Proxy on two networks | `--network a --network b` at `run` | `docker run --network a …`, then `docker network connect b <proxy>` |
+| Proxy DNS | resolv.conf with the host resolver only | The embedded DNS (127.0.0.11) forwards external names for non-internal networks. Verify with the probe, and mount a resolv.conf if it fails. |
+| Limits, caps | `--cpus --memory --pids-limit --cap-drop=all --security-opt=no-new-privileges` | the same flags |
+| Remove by name | `podman rm -f --ignore NAME` | `docker rm -f NAME` (ignore "No such container") |
+
+The wall check is the arbiter. Every line of `probe.sh` must pass on Docker exactly as it does on Podman before the switch.
+
 ## 8. Human setup checklist
 1. App repos with branch protection and **required checks**. In Talent Scout: client `checks` and `contract`, server `test`.
 2. **Agent token:** a fine-grained token for the app repos only, with Issues read/write and Metadata read and nothing else. Save it without echo:
@@ -411,6 +438,65 @@ loop until ops/STOP exists:
 - **Every claim is checkable.** The red proof, sabotage, CI and a live gate replace "it works on my machine" and "looks good".
 - **Knowledge compounds.** ADRs, the glossary, LESSONS and skill-update nodes stop the same mistake from coming back.
 - **The human's attention goes where it matters:** decisions, approvals and merges, not babysitting.
+
+
+### 9.1 Security: what this design defends, and how
+
+The agent is treated as **untrusted code that happens to be helpful**. It may be wrong, it may be prompt-injected by text it reads (issues, dependencies, web pages, CVs), and it may be careless with commands. Each threat has a control that does **not** depend on the agent behaving:
+
+| Threat | Control | Enforced by |
+|---|---|---|
+| Stealing the human's secrets (SSH keys, tokens, `.env`, cloud creds) | The sandbox sees only the agent's clone and a tmpfs home. The env is allowlisted and passed by file, and the server `.env` is never copied in. | Container mounts, env filter, wall check |
+| Exfiltrating code or data to an attacker host | An internal network with no route out. The only way out is a proxy allowing exact hosts, with no outside DNS and every connection logged per node. Refusals surface in the handoff and triage. | Network, proxy, wall check |
+| Pushing or merging malicious code | The agent token has Issues access only, so the code host refuses pushes (403). The orchestrator pushes with the human's login, and the human merges. | Token scope, code host |
+| Planting hooks or git config that run on the human's machine | The agent commits in its own clone. Commits return as a bundle (data only) and are fetched with `core.hooksPath=/dev/null`. The human's `.git` is never mounted. | Clone + bundle import |
+| Running agent-written code on the host with the human's env | Green checks, the red check and dependency installs run in the sandbox too. There is no host mode. | `run_code`, fail-closed runtime |
+| Escaping the container to root | Rootless runtime, no capabilities, `no-new-privileges`, a non-root user, and no runtime socket inside | Runtime flags, probe |
+| Poisoning shared caches for later runs | Caches are overlays whose writes are discarded. The build cache is filled only from `main`. | Mounts, `ops/sandbox warm` |
+| Runaway cost or loops | A cost budget per run, time and idle limits, `max_attempts`, the same failure twice means escalate, and `ops/STOP` | Orchestrator |
+| An agent loosening its own rules | Agent rules (`CLAUDE.md`, `AGENTS.md`, `.claude/*`, `.opencode/*`), CI and contract files are tier 3, so a human must merge them. The tier is computed, not declared. | Gate, tiers |
+| Changing contracts silently | A contract edit without the `contract-change` label fails the gate. The consumer pins hashes, and CI compares them. | Gate, contract job |
+| Credentials committed into the repo | The gate's secret patterns, and `.env` is never allowed in a diff | Gate |
+| Fake "it works" claims | Red proof, CI, independent review, verifier sabotage, and a live gate run by the human | Gate, reviewer, verifier |
+| Prompt injection inside the product | Untrusted text is wrapped as data blocks, forged delimiters are neutralised, and outputs are checked by code (for example, verbatim evidence quotes) | App code (an example from Talent Scout) |
+
+**Defense in depth.** Every row has at least two independent layers. For example, exfiltration needs a route (there is none), a resolvable name (none), *and* an allowlisted host. Pushing needs a token scope (refused) *and* a human merge.
+
+**Honest limits.** Know these before you rely on the design:
+- **Allowlisted hosts are channels too.** An agent can write data into an issue comment on the code host, or into a model prompt. The proxy logs and the token scope limit the damage; content filtering does not exist.
+- **The model provider sees the code** the agent reads. Choose providers accordingly.
+- **The agent holds its own model credential** inside the sandbox. Bound it with a spend cap.
+- **Container isolation is not a VM.** A kernel exploit is out of scope. For hostile workloads, run the sandbox inside a VM or use gVisor.
+- **The lead agent works outside the sandbox,** under its own permission harness, with the human present. Keep it on approval-per-action for anything outward-facing.
+
+### 9.2 The self-learning loop
+
+The system gets better from its own failures, but **every lesson becomes a reviewed change**. It never becomes silent self-modification. There are five loops, from fast to slow:
+
+```mermaid
+flowchart LR
+  A[Attempt fails the gate] -->|EXPECTED · SAW · DEAD ENDS| B[Next attempt, same node]
+  B -->|same SAW twice| H[Human]
+  C[Node finishes] -->|LESSONS.md entry| D[Repeated lesson?]
+  D -->|yes, ops/triage --apply| E[skill-update node:<br/>a check, a lint rule or a rule change]
+  E -->|tier 3, human merges| F[Agents read the new rule<br/>or are stopped by the new check]
+  G[Verifier sabotage gap] --> I[New test before merge]
+  J[Pilot / live-gate failure] --> K[New wall in the probe<br/>or a new gate check]
+```
+
+1. **Within a node** (minutes). The gate's `EXPECTED / SAW / FENCE / DEAD ENDS` feedback goes into the next attempt, and failed approaches go into `dead_ends` so they are not retried. The same `SAW` twice escalates instead of looping.
+2. **Across sessions of a node** (hours). The handoff (`KNOWN`, `NEVER`, `NEXT`) is posted on the issue and fed into the next brief, so a cold agent starts where the last one stopped.
+3. **Across nodes** (days). Each node may add a `docs/LESSONS.md` entry (context, problem, cause, lesson, follow-up, repeated?). Workers read LESSONS before they start.
+4. **Lessons into enforcement** (weeks). `ops/triage` finds lessons marked as repeats with no follow-up PR and opens a `skill-update` node. The rule is **prefer a check over text**: a test, a lint rule or a CI job beats another paragraph. In Talent Scout, three repeated "token cap" lessons became a test that fails when any model node's `max_tokens` drops below its floor.
+5. **The process itself** (on every incident). Verifier sabotage gaps become tests before the merge. Pilot failures became new walls in the probe ("every agent CLI starts"), and an orchestrator bug became a gate rule ("a gap blocks only on a real, open issue").
+
+Why this is safer than an agent that rewrites its own instructions:
+- the learning is **visible**, as diffs and PRs;
+- it is **tested**, because a new check must be seen red;
+- it is **reversible**, because it lives in git;
+- it is **human-approved**, because rule files are tier 3.
+
+The cost is speed: a lesson takes a node and a merge to take effect.
 
 ## 10. Trade-offs
 
@@ -440,6 +526,7 @@ loop until ops/STOP exists:
 - The green commands per repo (format, lint, typecheck, test, build).
 - Tier paths: what is expensive to undo (auth, migrations, CI, deploy, agent rules, contract files).
 - The egress allowlist: model APIs, the code host, package registries. Nothing else by default.
+- The container runtime: rootless Podman (the default) or rootless Docker (§7.6). Never a rootful daemon whose socket a user or an agent can reach.
 - The design system, if any, and whether UI nodes need mockups.
 - What only a human may do in production (migrations, data fixes, deploys).
 
