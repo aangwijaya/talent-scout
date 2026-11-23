@@ -510,6 +510,8 @@ The cost is speed: a lesson takes a node and a merge to take effect.
 | Lessons turn into checks | Agent subscription quotas (5-hour and weekly) can stall runs. The lead agent and the workers may share one quota. |
 | Contract pinning keeps repos independent | Contract changes are slower: issue, approval, owner PR, then sync PR |
 
+**How this compares with industry patterns,** and a step-by-step path to an enterprise setup (microVM sandboxes, a server-side orchestrator, central audit, secret brokers, auto-merge, policy-as-code): `docs/industry-comparison.md`.
+
 **When not to use it:**
 - a throwaway prototype;
 - a single-file script;
