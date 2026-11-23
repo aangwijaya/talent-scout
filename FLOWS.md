@@ -8,7 +8,7 @@ Dokumen ini menjelaskan alur dari saya (manusia) sampai ke AI agent:
 Alur aplikasinya sendiri ada di bagian akhir sebagai pelengkap.
 
 **Slide siap posting**
-- `media/linkedin-workflow/` (utama, 8 slide): `slide-01.png` … `slide-08.png` berukuran 1080×1350, plus `talent-scout-agent-workflow.pdf` untuk post dokumen (carousel PDF) LinkedIn.
+- `media/linkedin-workflow/` (utama, 9 slide): `slide-01.png` … `slide-08.png` berukuran 1080×1350, plus `talent-scout-agent-workflow.pdf` untuk post dokumen (carousel PDF) LinkedIn.
 - `media/linkedin/` (opsional, 7 slide tentang produk): bisa dipakai untuk post kedua.
 
 Untuk me-render ulang: `node media/render-slides.mjs linkedin-workflow talent-scout-agent-workflow.pdf`.
@@ -18,7 +18,8 @@ Untuk me-render ulang: `node media/render-slides.mjs linkedin-workflow talent-sc
 | ![Cover](media/linkedin-workflow/slide-01.png) | ![Peran](media/linkedin-workflow/slide-02.png) |
 | ![Ide ke node](media/linkedin-workflow/slide-03.png) | ![Loop satu node](media/linkedin-workflow/slide-04.png) |
 | ![Sandbox](media/linkedin-workflow/slide-05.png) | ![Review silang](media/linkedin-workflow/slide-06.png) |
-| ![Setelah merge](media/linkedin-workflow/slide-07.png) | ![Hasil](media/linkedin-workflow/slide-08.png) |
+| ![Setelah merge](media/linkedin-workflow/slide-07.png) | ![Diuji pada dirinya sendiri](media/linkedin-workflow/slide-08.png) |
+| ![Hasil](media/linkedin-workflow/slide-09.png) | |
 
 ---
 
@@ -31,7 +32,7 @@ Untuk me-render ulang: `node media/render-slides.mjs linkedin-workflow talent-sc
 | Orchestrator | `ops/run` (kode biasa, bukan LLM) | Memilih node yang siap, membuat sandbox, menjalankan gate, push dan membuka PR, memulai review | Login `gh` saya, hanya untuk push dan PR |
 | Client agent | Claude Code | Membangun client SvelteKit: test dulu, lalu kode, lalu handoff | Sandbox |
 | Server agent | OpenCode | Membangun server Go: test dulu, lalu kode, lalu handoff | Sandbox |
-| Reviewer | Agent yang lain (read-only) | Claude me-review PR server, OpenCode me-review PR client | Baca saja: issue dan diff |
+| Reviewer | Agent yang lain | Claude me-review PR server, OpenCode me-review PR client, hanya dari issue dan diff | Sandbox; boleh menulis, tapi semua tulisannya dibuang, jadi tidak bisa mengubah kode |
 | Verifier | `pr-verifier`, sub-agent dari lead agent | Diff vs issue, fence, CI, mencocokkan temuan review dengan kode, menyabotase test | Read-only terhadap GitHub |
 
 
@@ -48,8 +49,8 @@ flowchart LR
   RUN --> SA[Server agent<br/>OpenCode]:::agent
   CA --> PRC[PR client]:::code
   SA --> PRS[PR server]:::code
-  SA -.->|review read-only| PRC
-  CA -.->|review read-only| PRS
+  SA -.->|review, tulisan dibuang| PRC
+  CA -.->|review, tulisan dibuang| PRS
   PRC --> VER[pr-verifier]:::rev
   PRS --> VER
   VER -->|laporan| SUP
@@ -78,6 +79,8 @@ checks: [pnpm test]                   # bukti
 
 `ops/next` menghitung dari GitHub node mana yang siap: gap dijalankan dulu, lalu node yang membuka blokir paling banyak. Status tidak disimpan di dokumen.
 
+Kalau agent menemukan blocker di luar fence-nya, ia berhenti dengan `STATUS: gap`. Token agent tidak bisa membuat issue, jadi ia menulis draf issue gap di handoff. Orchestrator hanya memblokir node pada issue gap yang benar-benar ada dan masih open, tidak pernah pada node itu sendiri (#21). Kalau belum ada, node dieskalasi dan saya yang mengajukan draf itu atau memperluas fence.
+
 ```mermaid
 flowchart LR
   S81["server#81 ✓"]:::done --> C82["client#82 ▶"]:::ready
@@ -101,13 +104,13 @@ flowchart TB
   GA -->|"gagal: EXPECTED / SAW / FENCE / DEAD ENDS"| RED
   GA -->|"gagal 2× sama / budget habis"| NH["needs:human"]:::human
   GA --> PR[6 · PR + CI<br/>di-push oleh orchestrator]:::code
-  PR --> RV[7 · Review<br/>agent lain, read-only]:::rev
+  PR --> RV[7 · Review<br/>agent lain, tidak bisa mengubah kode]:::rev
   RV --> VF[8 · Verify<br/>sabotase test]:::rev
   VF --> M{9 · Saya}:::human
   M -->|merge| DONE[(main)]
   M -->|perbaiki langsung| PR
   M -->|kembalikan| RED
-  SC -.->|blocker di luar fence| GAP["issue type:gap baru, jalan duluan"]:::human
+  SC -.->|blocker di luar fence| GAP["draf gap → saya ajukan issue,<br/>atau fence diperluas"]:::human
   classDef agent fill:#ffffff,stroke:#145aff
   classDef code fill:#e9f9ec,stroke:#16ca2e
   classDef rev fill:#f1ebfd,stroke:#6d28d9
@@ -130,8 +133,8 @@ Saat ini `automerge: []`, jadi semua PR saya yang merge (mode pilot).
 flowchart TB
   subgraph L4["4 · Batas run: budget $6 · 60 menit · 3 percobaan"]
     subgraph L3["3 · Identitas sendiri: token GitHub hanya Issues · push ditolak 403"]
-      subgraph L2["2 · Env bersih: variabel di-allowlist · Supabase terpisah · LLM_MODE=fake · EMAIL_MODE=log"]
-        subgraph L1["1 · Worktree berpagar: satu per node · tulis di luar fence ditolak"]
+      subgraph L2["2 · Container rootless: env di-allowlist · tanpa capability · jaringan internal, keluar hanya lewat proxy allowlist"]
+        subgraph L1["1 · Clone milik agent: satu per node · repo dan home saya tidak terlihat"]
           AG[Coding agent]
         end
       end
@@ -142,10 +145,10 @@ flowchart TB
   classDef human fill:#fff1e3,stroke:#ffa64d
 ```
 
-- **Worktree:** satu git worktree per node. Agent hanya boleh menulis di path fence. Di luar worktree hanya ada dua pengecualian: file handoff (`ops/.state/handoff/`) yang boleh ditulis, dan Go module cache yang boleh dibaca. Untuk OpenCode, tulis di luar itu diset `deny`, bukan `ask`.
-- **Env:** hanya variabel di `AGENT_ENV_KEEP` yang diteruskan, misalnya PATH, HOME dan toolchain Go/pnpm. Database URL, API key, token dan socket saya dibuang.
+- **Clone:** agent bekerja di clone miliknya sendiri (`ops/.state/clones/<repo>-<N>`). Di dalam container hanya clone itu, file handoff, dan cache dependency (overlay, tulisannya dibuang) yang terlihat. Worktree saya, `.git` saya, home saya dan `ops/env` tidak ada di sana. Fence tetap dijaga oleh gate: perubahan di luar path yang tercantum di issue ditolak.
+- **Env:** hanya variabel toolchain yang di-allowlist yang diteruskan, lewat env file, bukan argumen. Database URL, API key, token dan socket saya dibuang, dan `.env` berisi secret server tidak pernah di-copy ke worktree.
 - **Identitas:** token fine-grained milik agent hanya punya akses Issues. Config `gh` agent kosong, dan git ke github.com dialihkan ke HTTPS dengan token agent. Jadi GitHub sendiri yang menolak push mereka.
-- **Batas run:** budget, timeout dan jumlah percobaan diatur di `ops/tiers.yaml`. Reviewer berjalan read-only: Read/Glob/Grep untuk Claude, dan agent `plan` untuk OpenCode.
+- **Batas run:** budget, timeout, jumlah percobaan, serta CPU, memori dan jumlah proses container diatur di `ops/tiers.yaml`. Reviewer hanya boleh membaca (Read/Glob/Grep untuk Claude, agent `plan` untuk OpenCode), dan folder kerjanya di-mount sebagai overlay yang tulisannya dibuang.
 - **Jaringan:** sandbox hanya berada di jaringan Podman internal. Satu-satunya jalan keluar adalah proxy `ts-egress` dengan allowlist host persis. DNS ke luar tidak bisa, dan setiap koneksi tercatat per node.
 - **Git:** agent commit di clone miliknya sendiri. Commit dibawa ke worktree saya sebagai bundle, dengan hook dimatikan.
 - **Terbukti di pilot (4 node, kedua agent, tier 1–3):** `ops/run --check-sandbox` memeriksa semua dinding dari dalam image sebelum setiap sesi.
@@ -159,6 +162,19 @@ flowchart TB
 5. **Learning loop:** setiap node menulis pelajaran ke `docs/LESSONS.md`. Pelajaran yang terulang menjadi node `skill-update`, dan check atau lint rule lebih diutamakan daripada menambah teks.
 
 ---
+
+## F. Sandbox diuji pada dirinya sendiri
+
+Sebelum sandbox jadi satu-satunya mode, ia dijalankan dulu pada empat node sungguhan sebagai pilot (ADR 0002). Empat node itu mencakup kedua agent, tier 1 sampai 3, dan satu node UI. Pilot itu menemukan empat bug di sandbox-nya sendiri. Semuanya diperbaiki, dan masing-masing sekarang dijaga test:
+
+| Bug | Gejala | Perbaikan |
+|---|---|---|
+| Folder induk HOME milik root | OpenCode crash sebelum start (`EACCES`), dan node tereskalasi | State, cache dan config gh dipindah ke `/tmp`, dan probe sekarang benar-benar menjalankan CLI agent (#18) |
+| Log proxy tidak lengkap | Log egress kosong padahal agent bicara dengan model | tinyproxy di level Info, sehingga setiap koneksi yang diizinkan tercatat (#19) |
+| Reviewer tidak bisa start | OpenCode ingin menulis `.opencode/` di mount read-only, sehingga review independen gagal | Folder reviewer jadi overlay yang tulisannya dibuang (#20) |
+| Node menunggu dirinya sendiri | Draf gap dari agent menyebut nomor node-nya sendiri, dan node itu terkunci | Gap hanya bisa memblokir lewat issue nyata yang masih open (#21) |
+
+Verifier juga bekerja di luar sandbox. Contohnya di client#91: ia menemukan enam perilaku yang lolos semua test (live region, throttle, `viewport-fit`, `theme-color`, ukuran tombol, satu tombol utama). Keenamnya sekarang dijaga test, dan setiap test dibuktikan dengan sabotase satu baris.
 
 ## Lampiran 1. Alur aplikasi
 
@@ -221,18 +237,23 @@ flowchart LR
 
 **Bahasa Indonesia**
 
-> Yang ingin saya tunjukkan bukan aplikasinya, tapi cara aplikasi itu dibangun.
+> Sebelum saya memercayai sandbox untuk AI agent saya, saya membiarkannya gagal dulu.
 >
-> Talent Scout dibangun oleh satu manusia dan satu tim AI agent, masing-masing dengan jalurnya sendiri:
+> Talent Scout dibangun oleh satu manusia dan satu tim AI agent. Setiap agent bekerja di container rootless:
+> - di dalam clone miliknya sendiri, sehingga repo saya, home saya dan secret saya tidak terlihat;
+> - di jaringan internal, dengan proxy yang hanya mengizinkan host tertentu dan mencatat setiap koneksi;
+> - dengan token GitHub yang tidak bisa push.
 >
-> 🧭 Lead agent (Claude Code) menyusun rencana bersama saya, lalu memecahnya menjadi issue berpagar
-> 🔁 Orchestrator, kode biasa dan bukan LLM, memilih node yang siap dan menjalankan gate
-> 🛠️ Dua coding agent: Claude Code untuk client, OpenCode untuk server
+> Sebelum sandbox itu jadi satu-satunya jalan, saya menjalankannya pada empat pekerjaan sungguhan sebagai pilot. Pilot itu menemukan empat bug di sandbox-nya sendiri: agent yang crash saat start, log yang tidak lengkap, reviewer yang tidak bisa jalan, dan tugas yang menunggu dirinya sendiri. Keempatnya diperbaiki dan kini dijaga test.
+>
+> Cara kerjanya:
+> 🧭 Lead agent (Claude Code) menyusun rencana bersama saya dan memecahnya menjadi issue berpagar
+> 🔁 Orchestrator, kode biasa dan bukan LLM, menjalankan gate
+> 🛠️ Claude Code membangun client, OpenCode membangun server
 > 🔍 Masing-masing di-review oleh agent yang lain, lalu verifier menyabotase test-nya
-> 🧱 Setiap agent bekerja di sandbox: worktree berpagar, env bersih, token GitHub yang tidak bisa push, plus batas budget dan waktu
 > 🔑 Saya memegang kunci terakhir: secret, production, live test, dan setiap merge
 >
-> 88 PR ter-merge. 0 credential production pernah diberikan ke agent.
+> 112 PR ter-merge, semuanya oleh saya. 0 credential production pernah diberikan ke agent.
 >
 > Agent bergerak cepat di dalam dinding. Kode memutuskan apa yang benar. Manusia membuat keputusan yang penting.
 >
@@ -240,18 +261,23 @@ flowchart LR
 
 **English**
 
-> The point isn't the app. It's how it gets built.
+> Before I trusted a sandbox for my AI agents, I let it fail first.
 >
-> Talent Scout is built by one human and a team of AI agents, each in its own lane:
+> Talent Scout is built by one human and a team of AI agents. Every agent works in a rootless container:
+> - inside its own clone, so my repositories, home and secrets are invisible to it;
+> - on an internal network, behind a proxy that allows exact hosts and logs every connection;
+> - with a GitHub token that cannot push.
 >
-> 🧭 A lead agent (Claude Code) plans with me and turns ideas into fenced GitHub issues
-> 🔁 An orchestrator, plain code and not an LLM, picks ready nodes and runs the gates
-> 🛠️ Two coding agents: Claude Code for the client, OpenCode for the server
+> Before the sandbox became the only way to run, I put it through a pilot on four real tasks. The pilot found four bugs in the sandbox itself: an agent that crashed at start, an incomplete log, a reviewer that could not run, and a task left waiting on itself. All four are fixed and now guarded by tests.
+>
+> How the work flows:
+> 🧭 A lead agent (Claude Code) plans with me and turns ideas into fenced issues
+> 🔁 An orchestrator, plain code and not an LLM, runs the gates
+> 🛠️ Claude Code builds the client, OpenCode builds the server
 > 🔍 Each is reviewed by the other agent, then a verifier sabotages the tests
-> 🧱 Every agent works in a sandbox: a fenced worktree, a clean env, a GitHub token that can't push, plus budget and time limits
 > 🔑 I hold the last key: secrets, production, live tests and every merge
 >
-> 88 PRs merged. 0 production credentials ever given to an agent.
+> 112 PRs merged, every one by me. 0 production credentials ever given to an agent.
 >
 > Agents move fast inside walls. Code decides what's true. A person makes the calls that matter.
 >
