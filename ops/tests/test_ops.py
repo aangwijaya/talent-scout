@@ -17,6 +17,7 @@ sys.path.insert(0, str(OPS))
 import checks
 import container
 import fakes
+import ledger
 import lib
 from fakes import git_worktree
 
@@ -564,7 +565,7 @@ class ContractSync(unittest.TestCase):
         sync = load_script("contract-sync")
         calls = []
 
-        def fake_sh(cmd, cwd=None, check=True):
+        def fake_sh(cmd, cwd=None, check=True, env=None):
             calls.append(cmd)
             out = "abcdef1234567890\n" if cmd[:2] == ["git", "rev-parse"] else ""
             if cmd[:2] == ["git", "show"] and cmd[2].endswith("contract.lock"):
@@ -597,7 +598,7 @@ class ContractSync(unittest.TestCase):
         sync = load_script("contract-sync")
         calls, sandboxed = [], []
         with tempfile.TemporaryDirectory() as tmp:
-            def fake_sh(cmd, cwd=None, check=True):
+            def fake_sh(cmd, cwd=None, check=True, env=None):
                 calls.append(cmd)
                 if cmd[:3] == ["git", "worktree", "add"]:
                     for path in sync.FILES.values():
@@ -672,6 +673,7 @@ class Reconcile(unittest.TestCase):
             self.git("push", "-q", "origin", "node/9001:main", cwd=checkout)
             calls = []
             run.ROOT, run.gh = root, lambda *a: calls.append(a) or ""
+            run.pr_merge_info = lambda node, branch: {"pr": 7, "by": "human", "ci_red": None}
             nodes = {n.id: n for n in (node(9001, "server", closed=True, labels=["status:review", "needs:human", "type:gap"]),
                                        node(9002, "server", closed=True))}
             run.reconcile(nodes, "client")
@@ -680,6 +682,8 @@ class Reconcile(unittest.TestCase):
             run.reconcile(nodes, "server")
             self.assertFalse((root / "wt" / "server-9001").exists())
             self.assertTrue((root / "wt" / "server-9002").exists(), "unmerged work must stay")
+            merged = [r for _, _, r in ledger.records() if r["event"] == "merged" and r["node"] == "server#9001"]
+            self.assertEqual([(r["pr"], r["by"]) for r in merged], [(7, "human")], "the merge is on record")
             self.assertEqual(calls, [("issue", "edit", "9001", "-R", lib.REPOS["server"],
                                       "--remove-label", "status:review", "--remove-label", "needs:human")])
 

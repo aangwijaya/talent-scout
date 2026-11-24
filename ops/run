@@ -24,10 +24,13 @@ import importlib.machinery
 import importlib.util
 
 import container
+import creds
+import identity
+import ledger
 from checks import feedback, gate, saw_key
 from lib import (AGENT_LOGIN_KEEP, AGENTS, HANDOFF_DIR, HANDOFF_MARK, OPS, PROXY_ENV_KEEP, REPOS, ROOT, STATE,
-                 STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, config, gh, handoff_path, load_nodes,
-                 load_state, parse_handoff, save_state, sh, state_path, with_egress)
+                 STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, config, gh, gh_env, handoff_path, load_nodes,
+                 load_state, parse_handoff, push_argv, save_state, sh, state_path, with_egress)
 
 _loader = importlib.machinery.SourceFileLoader("brief", str(OPS / "brief"))
 _spec = importlib.util.spec_from_loader("brief", _loader)
@@ -38,13 +41,15 @@ AUTO = "--auto" in sys.argv
 LAST_AGENT_ERROR = None  # the API error that ended the last agent run, if any
 LAST_EGRESS_REFUSED = []  # hosts the sandbox's proxy refused during the last agent run
 REVIEW_UNAVAILABLE = None  # why the last independent review returned no findings
+LAST_COST = None  # what the last agent run reported spending, in USD (OpenCode reports it; Claude -p does not)
 CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm:*)", "Bash(go:*)", "Bash(gofmt:*)",
                 "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)", "Bash(git diff:*)",
                 "Bash(git log:*)", "Bash(git show:*)", "Bash(gh issue view:*)", "Bash(gh issue list:*)",
                 "Bash(gh issue create:*)", "Bash(gh issue comment:*)", "Bash(rg:*)", "Bash(ls:*)"]
 
-# The agent's own GitHub identity: a fine-grained token with Issues read/write and Metadata read only.
-# It cannot push, open PRs or merge; ops/run does those with the human's gh. See WORKFLOW.md.
+# The agent's own GitHub identity, with Issues read/write and Metadata read only: the ts-agent App's
+# installation token (github_identity: apps, ADR 0006), or before that a fine-grained token in this file.
+# It cannot push, open PRs or merge; ops/run does those. See WORKFLOW.md.
 AGENT_GH_TOKEN = OPS / "env" / "agent.gh-token"
 # Agents run code they write (go test, pnpm scripts), so every variable passed here reaches that
 # code too. The lists live in lib.py, shared with the gate's checks; agents add only their CLI login.
@@ -65,14 +70,25 @@ class Stop(Exception):
     pass
 
 
-def agent_env(wt, gh_config_dir):
-    """The whole environment an agent gets. gh_config_dir is an empty dir, so gh has no login to fall back to."""
+def agent_token(repo, cfg):
+    """The agent's GitHub token for one repo."""
+    if identity.mode(cfg) == "apps":
+        try:
+            return identity.token("agent", [REPOS[repo]], cfg)
+        except (identity.IdentityError, creds.SecretMissing) as err:
+            raise Stop(f"no agent token: {err}")
     try:
-        token = AGENT_GH_TOKEN.read_text().strip()
-    except FileNotFoundError:
+        token = (creds.read("agent-gh-token", cfg) if creds.mode(cfg) == "creds" else AGENT_GH_TOKEN.read_text()).strip()
+    except (FileNotFoundError, creds.SecretMissing):
         raise Stop(f"no agent GitHub token at {AGENT_GH_TOKEN}; see 'Agent GitHub token' in WORKFLOW.md")
     if not token.startswith("github_pat_"):
         raise Stop(f"{AGENT_GH_TOKEN} must hold a fine-grained token (github_pat_...), not a classic or gh login token")
+    return token
+
+
+def agent_env(wt, gh_config_dir, repo=None):
+    """The whole environment an agent gets. gh_config_dir is an empty dir, so gh has no login to fall back to."""
+    token = agent_token(repo or Path(wt).name.split("-")[0], config())
     env = {k: os.environ[k] for k in AGENT_ENV_KEEP if k in os.environ}
     env.update(PWD=str(wt), GH_TOKEN=token, GH_CONFIG_DIR=str(gh_config_dir), GH_PROMPT_DISABLED="1",
                GIT_TERMINAL_PROMPT="0", GIT_CONFIG_COUNT=str(len(AGENT_GIT_CONFIG)))
@@ -126,8 +142,8 @@ def read_events(lines, seen, log, events):
 
 
 def run_agent(agent, prompt, wt, cfg, read_only=False):
-    global LAST_AGENT_ERROR, LAST_EGRESS_REFUSED
-    LAST_AGENT_ERROR, LAST_EGRESS_REFUSED = None, []
+    global LAST_AGENT_ERROR, LAST_EGRESS_REFUSED, LAST_COST
+    LAST_AGENT_ERROR, LAST_EGRESS_REFUSED, LAST_COST = None, [], None
     HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
     container.mode(cfg)
     repo = Path(wt).name.split("-")[0]
@@ -213,6 +229,7 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
                     cost = f", ${seen['cost']:.2f}" if agent == "opencode" else ""
                     print(f"  {agent} working, {elapsed // 60} min{cost} (tail -f {log_path})", flush=True)
     LAST_AGENT_ERROR = seen.get("error")
+    LAST_COST = round(seen["cost"], 4) if agent == "opencode" else None
     refused = LAST_EGRESS_REFUSED = container.save_egress_log(Path(wt).name, started)
     if refused:
         print(f"  egress refused for {Path(wt).name}: {', '.join(refused)} (ops/.state/egress/)", flush=True)
@@ -239,13 +256,22 @@ def prepare(node):
             # The checks run in the worktree and the agent works in its clone: both need it, and both
             # get their dependencies installed in the sandbox.
             agent_env = OPS / "env" / "client.env.agent"
+            encrypted = creds.mode(cfg) == "creds" and creds.path("client-env-agent").exists()
             for target in (wt, container.clone_path(wt)):
-                if agent_env.exists():
+                if encrypted:
+                    (target / ".env").touch(mode=0o600)
+                    (target / ".env").write_text(creds.read("client-env-agent", cfg))
+                elif agent_env.exists():
                     shutil.copy2(agent_env, target / ".env")
                 done = container.run_code("pnpm install --frozen-lockfile", str(target), "client", cfg, timeout=600)
                 if done.returncode:
                     raise RuntimeError(f"pnpm install in the sandbox: {done.stderr.strip()[-500:]}")
     return wt
+
+
+def audit(event, node=None, **fields):
+    """One record in the audit ledger (ops/ledger.py) for what the orchestrator just did or decided."""
+    return ledger.append(event, actor="orchestrator", node=node.id if node else None, **fields)
 
 
 def set_status(node, new):
@@ -258,10 +284,12 @@ def set_status(node, new):
 def post_handoff(node, text):
     text = with_egress(text, load_state(node.id).get("egress_refused", []))
     gh("issue", "comment", str(node.number), "-R", REPOS[node.repo],
-       "--body", f"{HANDOFF_MARK}\n{text.strip()}")
+       "--body", f"{HANDOFF_MARK}\n{ledger.anchor()}\n{text.strip()}")
 
 
-def escalate(node, reason, feedback_text=""):
+def escalate(node, reason, feedback_text="", event="escalated"):
+    """Hand the node to the human: a decision is needed ("escalated") or a PR is ready to merge ("ready")."""
+    audit(event, node, reason=reason[:500])
     post_handoff(node, f"STATUS: needs_human\nNEXT: {reason}\nKNOWN: {feedback_text or 'see the run log'}")
     gh("issue", "edit", str(node.number), "-R", REPOS[node.repo], "--add-label", "needs:human")
     print(f"{node.id}: escalated: {reason}")
@@ -297,7 +325,7 @@ def wait_ci(node, branch, cfg):
     while time.time() < deadline:
         if STOP_FILE.exists():
             raise Stop("stop requested")
-        raw = sh(["gh", "pr", "checks", branch, "-R", full, "--json", "name,bucket"], check=False).stdout
+        raw = sh(["gh", "pr", "checks", branch, "-R", full, "--json", "name,bucket"], check=False, env=gh_env()).stdout
         checks = json.loads(raw or "[]")
         if checks and all(c["bucket"] != "pending" for c in checks):
             bad = [c["name"] for c in checks if c["bucket"] == "fail"]
@@ -354,6 +382,7 @@ def process(node, cfg):
     state = load_state(node.id)
     handoff_file = handoff_path(node.id)
     set_status(node, "status:in-progress")
+    audit("run.started", node, agent=node.agent, attempts_before=state["attempts"])
     note = state.get("feedback")
     while True:
         if state["attempts"] >= cfg["max_attempts"]:
@@ -371,6 +400,9 @@ def process(node, cfg):
                 state["dead_ends"].append(f"egress refused: {', '.join(new)} (not in ops/egress-allowlist)")
             save_state(node.id, state)
         text = handoff_file.read_text() if handoff_file.exists() else ""
+        audit("attempt", node, attempt=state["attempts"], agent=node.agent, cost_usd=LAST_COST,
+              status=parse_handoff(text).get("STATUS", "").split(" ")[0] or None,
+              error=LAST_AGENT_ERROR, egress_refused=LAST_EGRESS_REFUSED or None)
         if not text and LAST_AGENT_ERROR:
             # Retrying cannot help while the API refuses every call.
             return escalate(node, f"the agent stopped: {LAST_AGENT_ERROR}")
@@ -383,24 +415,30 @@ def process(node, cfg):
                 return escalate(node, "STATUS: gap without an open gap issue; file the draft below or widen the fence",
                                 fields.get("GAPS", "")[:1500])
             set_status(node, "status:todo")
+            audit("parked", node, behind=fields.get("GAPS", "")[:300])
             return print(f"{node.id}: parked behind {fields.get('GAPS')}")
         if status == "needs_human":
             post_handoff(node, text)
             return escalate(node, fields.get("NEXT", "decision needed"))
         result = gate(node, wt, cfg, text)
         failures = result["failures"]
+        audit("gate", node, attempt=state["attempts"], tier=result["tier"], passed=not failures,
+              failed=sorted({f["check"] for f in failures}) or None)
         review_note = ""
         if not failures:
             confirm(f"{node.id}: gate passed (tier {result['tier']}). Push and open a PR")
             branch = sh(["git", "branch", "--show-current"], cwd=wt).stdout.strip()
-            sh(["git", "push", "-q", "-u", "origin", "HEAD"], cwd=wt)
-            existing = sh(["gh", "pr", "view", branch, "-R", REPOS[node.repo], "--json", "number"], check=False)
+            sh(push_argv(REPOS[node.repo], branch, cfg), cwd=wt, env=gh_env(cfg))
+            existing = sh(["gh", "pr", "view", branch, "-R", REPOS[node.repo], "--json", "number"], check=False,
+                          env=gh_env(cfg))
             if existing.returncode:
                 credit = "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)" if node.agent == "claude" else ""
+                audit("pr.opened", node, branch=branch, tier=result["tier"])
                 gh("pr", "create", "-R", REPOS[node.repo], "--head", branch, "--title", node.title,
-                   "--body", f"Closes #{node.number}\n\nTier {result['tier']}.\n\n{text}{credit}")
+                   "--body", f"Closes #{node.number}\n\nTier {result['tier']}.\n\n{text}{credit}\n\n{ledger.anchor()}")
             set_status(node, "status:review")
             failures = wait_ci(node, branch, cfg)
+            audit("ci", node, passed=not failures, failed=[f["saw"] for f in failures] or None)
         if not failures and result["tier"] >= 2:
             findings = independent_review(node, wt, cfg)
             if findings is None:
@@ -408,15 +446,18 @@ def process(node, cfg):
                 findings = []
                 review_note = f" Independent review unavailable ({REVIEW_UNAVAILABLE}); verify it yourself."
             high = [f for f in findings if f.get("severity") == "High"]
+            audit("review", node, available=REVIEW_UNAVAILABLE is None, findings=len(findings), high=len(high))
             failures = [{"check": "review", "expected": "no High findings", "saw": f"{f['file']}: {f['summary']}"} for f in high]
         if not failures:
             post_handoff(node, text)
             if result["tier"] in cfg["automerge"]:
                 gh("pr", "merge", branch, "-R", REPOS[node.repo], "--merge", "--delete-branch")
+                audit("merged", node, by="orchestrator", tier=result["tier"])
                 return print(f"{node.id}: merged")
             url = gh("pr", "view", branch, "-R", REPOS[node.repo], "--json", "url", "--jq", ".url").strip()
             reviewed = "green and reviewed" if result["tier"] >= 2 else "green (tier 1: no independent review)"
-            escalate(node, f"Tier {result['tier']} PR is {reviewed}.{review_note} Merge when you agree: {url}")
+            escalate(node, f"Tier {result['tier']} PR is {reviewed}.{review_note} Merge when you agree: {url}",
+                     event="ready")
             return print(f"\n>>> {node.id} is ready for you to merge: {url}\n{'   ' + review_note + chr(10) if review_note else ''}"
                          f"    After merging, ops/run --reconcile tidies labels and the worktree.\n")
         key = saw_key(failures)
@@ -452,6 +493,7 @@ def reconcile(nodes, repo=None):
         if dirty or not merged:
             print(f"{node.id}: closed, but {wt} is {'dirty' if dirty else 'not merged'}; left in place")
             continue
+        audit("merged", node, **pr_merge_info(node, branch))
         sh(["git", "worktree", "remove", str(wt)], cwd=checkout)
         shutil.rmtree(container.clone_path(wt), ignore_errors=True)
         sh(["git", "branch", "-d", branch], cwd=checkout, check=False)
@@ -460,13 +502,25 @@ def reconcile(nodes, repo=None):
         print(f"{node.id}: removed {wt}")
 
 
+def pr_merge_info(node, branch):
+    """Who merged the node's PR, and which checks were red when it merged (a pilot target: none)."""
+    try:
+        data = json.loads(gh("pr", "view", branch, "-R", REPOS[node.repo], "--json",
+                             "number,mergedBy,statusCheckRollup") or "{}")
+    except (RuntimeError, ValueError) as err:
+        return {"lookup_error": str(err)[:200]}
+    red = [c.get("name") or c.get("context") for c in data.get("statusCheckRollup") or []
+           if (c.get("conclusion") or c.get("state") or "").upper() in ("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT")]
+    return {"pr": data.get("number"), "by": (data.get("mergedBy") or {}).get("login"), "ci_red": red or None}
+
+
 def check_agent_auth():
     """Live probe of the agent token: it reads issues, and GitHub itself refuses its pushes."""
     ok = True
     with tempfile.TemporaryDirectory() as tmp:
         for repo in REPOS:
             checkout = ROOT / f"talent-scout-{repo}"
-            env = agent_env(checkout, tmp)
+            env = agent_env(checkout, tmp, repo)
             issues = subprocess.run(["gh", "issue", "list", "--limit", "1", "--json", "number"], cwd=checkout,
                                     env=env, capture_output=True, text=True)
             # --dry-run never writes; GitHub answers the receive-pack request with 403 before any ref moves.
@@ -535,6 +589,7 @@ def main():
             confirm(f"Start {node.id}: {node.title}")
             process(node, cfg)
         except Stop as stop:
+            audit("handed_back", node, reason=str(stop)[:300])
             post_handoff(node, f"STATUS: needs_human\nNEXT: resume with ops/run --node {node.id}\nKNOWN: {stop}")
             set_status(node, "status:todo")
             print(f"{node.id}: handed back: {stop}")
