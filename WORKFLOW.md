@@ -14,6 +14,10 @@ ops/auto client#15           # reconcile, then that node with --once --auto in a
 ops/run --reconcile          # after you merge: drop stale labels, remove merged worktrees
 ops/brief client#15          # the exact context a session receives
 ops/stop                     # hand work back and halt; ops/stop --clear to re-enable
+ops/report                   # per-node results from the audit ledger, and the tier 1 auto-merge targets
+ops/report --verify          # check the ledger chain and every head published on GitHub
+ops/report --note client#12 intervention "fixed the lint by hand" --by lead
+                             # record what a person did (intervention or escaped-high)
 ```
 
 ## The node
@@ -108,11 +112,32 @@ Before a UI node runs, its screens are mocked up here with the human and publish
 
 Like the planning skills, they need a human, so a headless agent must never load them.
 
+## Audit ledger
+
+`ops/run` appends one record per step to the audit ledger (`ops/ledger.py`):
+- `run.started`, `attempt` (with cost and refused egress), and `gate` (tier, pass, failed checks);
+- `pr.opened`, `ci`, and `review` (finding and High counts);
+- `ready`, `escalated`, `handed_back`, `parked`, and `merged`, with who merged and which checks were red at the time.
+
+**Where it lives:** `~/.local/state/talent-scout-ops/audit-YYYY-MM.jsonl` (or `$OPS_LEDGER_DIR`). That's outside the repo and outside every sandbox mount, and the files are never deleted.
+
+**Why tampering shows:**
+- Each record carries the hash of the one before it, so a changed, dropped or reordered line breaks the chain.
+- The current head (seq and hash) goes as a hidden line into every PR body and handoff comment. GitHub's timestamps witness it, and `ops/report --verify` checks that the ledger still holds every published head. That also catches a cut-off tail.
+
+**What a person does goes in too, through `ops/report --note`:**
+- an **intervention**: you or the lead agent fixed or decided something a node could not;
+- an **escaped-high**: the verifier found a High finding that the review missed.
+
+`ops/report` turns all this into one row per node, plus the tier 1 auto-merge targets below.
+
 ## Pilot targets before enabling tier 2 auto-merge
 
 - Under 1 human intervention per tier 1–2 issue on average
 - No merge with failing CI, and no High finding that escaped
 - Most gaps found at SCOPE, not mid-implementation
+
+Tier 1 auto-merge needs the last 10 merged tier 1 nodes in the ledger to meet the first two lines. `ops/report` shows where they stand.
 
 ## Setup that only a human can do
 

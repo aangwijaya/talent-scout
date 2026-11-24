@@ -17,6 +17,7 @@ sys.path.insert(0, str(OPS))
 import checks
 import container
 import fakes
+import ledger
 import lib
 from fakes import git_worktree
 
@@ -640,6 +641,7 @@ class Reconcile(unittest.TestCase):
             self.git("push", "-q", "origin", "node/9001:main", cwd=checkout)
             calls = []
             run.ROOT, run.gh = root, lambda *a: calls.append(a) or ""
+            run.pr_merge_info = lambda node, branch: {"pr": 7, "by": "human", "ci_red": None}
             nodes = {n.id: n for n in (node(9001, "server", closed=True, labels=["status:review", "needs:human", "type:gap"]),
                                        node(9002, "server", closed=True))}
             run.reconcile(nodes, "client")
@@ -648,6 +650,8 @@ class Reconcile(unittest.TestCase):
             run.reconcile(nodes, "server")
             self.assertFalse((root / "wt" / "server-9001").exists())
             self.assertTrue((root / "wt" / "server-9002").exists(), "unmerged work must stay")
+            merged = [r for _, _, r in ledger.records() if r["event"] == "merged" and r["node"] == "server#9001"]
+            self.assertEqual([(r["pr"], r["by"]) for r in merged], [(7, "human")], "the merge is on record")
             self.assertEqual(calls, [("issue", "edit", "9001", "-R", lib.REPOS["server"],
                                       "--remove-label", "status:review", "--remove-label", "needs:human")])
 

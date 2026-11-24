@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Read the audit ledger (ops/ledger.py): how each node went, and whether tier 1 may auto-merge.
+
+ops/report                         one row per node, then the tier 1 auto-merge targets
+ops/report --verify                check the chain, and that every head published on GitHub is still in it
+ops/report --verify --offline      check the chain only
+ops/report --note NODE KIND TEXT [--by lead|human]
+                                   record what a person did; KIND is intervention or escaped-high
+"""
+import json
+import sys
+from datetime import datetime
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import ledger
+from lib import REPOS, gh
+
+NOTE_KINDS = ("intervention", "escaped-high")
+# Q20 of the 2026-11-24 grilling: the last 10 merged tier 1 nodes, none escaped or merged red,
+# and under one human intervention each on average.
+WINDOW = 10
+
+
+def summarize(records):
+    nodes = {}
+    for r in records:
+        if not r.get("node"):
+            continue
+        n = nodes.setdefault(r["node"], {
+            "node": r["node"], "tier": None, "attempts": 0, "first_gate": None, "ci_red": 0, "high": 0,
+            "gaps": 0, "interventions": 0, "escaped_high": 0, "merged_red": False, "cost": None,
+            "start": r["ts"], "end": r["ts"], "outcome": "running", "merged_by": None})
+        n["end"] = r["ts"]
+        event = r["event"]
+        if event == "attempt":
+            n["attempts"] += 1
+            if r.get("cost_usd") is not None:
+                n["cost"] = round((n["cost"] or 0) + r["cost_usd"], 4)
+        elif event == "gate":
+            n["tier"] = r.get("tier")
+            if n["first_gate"] is None:
+                n["first_gate"] = bool(r.get("passed"))
+        elif event == "ci" and not r.get("passed"):
+            n["ci_red"] += 1
+        elif event == "review":
+            n["high"] += r.get("high") or 0
+        elif event == "parked":
+            n["gaps"] += 1
+            n["outcome"] = "parked"
+        elif event in ("escalated", "handed_back"):
+            n["interventions"] += 1
+            n["outcome"] = event.replace("_", " ")
+        elif event == "ready":
+            n["outcome"] = "ready"
+        elif event == "merged":
+            n["outcome"], n["merged_by"] = "merged", r.get("by")
+            n["merged_red"] = n["merged_red"] or bool(r.get("ci_red"))
+            n["tier"] = n["tier"] or r.get("tier")
+        elif event == "note":
+            if r.get("kind") == "intervention":
+                n["interventions"] += 1
+            elif r.get("kind") == "escaped-high":
+                n["escaped_high"] += 1
+    return list(nodes.values())
+
+
+def minutes(n):
+    start, end = (datetime.fromisoformat(n[k]) for k in ("start", "end"))
+    return int((end - start).total_seconds() // 60)
+
+
+def table(rows):
+    out = ["| Node | Tier | Attempts | 1st gate | CI red | Review High | Escaped High | Gaps | Interventions "
+           "| Cost | Min | Outcome |", "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for n in rows:
+        first = {True: "pass", False: "fail", None: "-"}[n["first_gate"]]
+        cost = f"${n['cost']:.2f}" if n["cost"] is not None else "-"
+        outcome = f"merged by {n['merged_by']}" if n["outcome"] == "merged" and n["merged_by"] else n["outcome"]
+        out.append(f"| {n['node']} | {n['tier'] or '-'} | {n['attempts']} | {first} | {n['ci_red']} | {n['high']} "
+                   f"| {n['escaped_high']} | {n['gaps']} | {n['interventions']} | {cost} | {minutes(n)} | {outcome} |")
+    return "\n".join(out)
+
+
+def tier1_readiness(rows):
+    """Whether the auto-merge targets for tier 1 hold. Returns (met, lines)."""
+    merged = [n for n in rows if n["tier"] == 1 and n["outcome"] == "merged"]
+    recent = sorted(merged, key=lambda n: n["end"])[-WINDOW:]
+    escaped = sum(n["escaped_high"] for n in recent)
+    red = [n["node"] for n in recent if n["merged_red"]]
+    average = sum(n["interventions"] for n in recent) / len(recent) if recent else 0
+    checks = [(len(recent) == WINDOW, f"{len(recent)}/{WINDOW} merged tier 1 nodes on record"),
+              (escaped == 0, f"{escaped} escaped High finding(s)"),
+              (not red, f"merged with red CI: {', '.join(red) or 'none'}"),
+              (bool(recent) and average < 1, f"{average:.2f} human interventions per node (target < 1)")]
+    lines = [f"- [{'x' if ok else ' '}] {text}" for ok, text in checks]
+    return all(ok for ok, _ in checks), lines
+
+
+def published_heads():
+    """Every ledger head written into recent PR bodies and issue comments, in both repos."""
+    texts = []
+    for full in REPOS.values():
+        texts += json.loads(gh("pr", "list", "-R", full, "--state", "all", "--limit", "100", "--json", "body") or "[]")
+        texts += json.loads(gh("api", f"repos/{full}/issues/comments?per_page=100&sort=created&direction=desc") or "[]")
+    return ledger.anchors_in(t.get("body", "") for t in texts)
+
+
+def main(argv):
+    if "--note" in argv:
+        i = argv.index("--note")
+        try:
+            node, kind, text = argv[i + 1:i + 4]
+        except ValueError:
+            raise SystemExit("usage: ops/report --note NODE KIND TEXT [--by lead|human]")
+        if kind not in NOTE_KINDS:
+            raise SystemExit(f"KIND must be one of {', '.join(NOTE_KINDS)}")
+        by = argv[argv.index("--by") + 1] if "--by" in argv else "human"
+        record = ledger.append("note", actor=by, node=node, kind=kind, text=text[:500])
+        return print(f"recorded seq {record['seq']}: {node} {kind}")
+    if "--verify" in argv:
+        anchors = [] if "--offline" in argv else published_heads()
+        problems, count, head = ledger.verify(anchors=anchors)
+        for problem in problems:
+            print(f"FAIL {problem}")
+        print(f"{count} records, head {head[:16]}…, {len(anchors)} published head(s) checked")
+        return 1 if problems else 0
+    rows = summarize(r for _, _, r in ledger.records())
+    if not rows:
+        return print(f"The audit ledger in {ledger.ledger_dir()} has no node records yet.")
+    print(table(rows))
+    met, lines = tier1_readiness(rows)
+    print(f"\nTier 1 auto-merge targets: {'met' if met else 'not met yet'}")
+    print("\n".join(lines))
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv) or 0)
