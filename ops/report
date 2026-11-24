@@ -12,8 +12,9 @@ import sys
 from datetime import datetime
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import budget
 import ledger
-from lib import REPOS, gh
+from lib import REPOS, config, gh
 
 NOTE_KINDS = ("intervention", "escaped-high")
 # Q20 of the 2026-11-24 grilling: the last 10 merged tier 1 nodes, none escaped or merged red,
@@ -32,10 +33,10 @@ def summarize(records):
             "start": r["ts"], "end": r["ts"], "outcome": "running", "merged_by": None})
         n["end"] = r["ts"]
         event = r["event"]
+        if r.get("cost_usd") is not None:  # attempts and reviews both spend
+            n["cost"] = round((n["cost"] or 0) + r["cost_usd"], 4)
         if event == "attempt":
             n["attempts"] += 1
-            if r.get("cost_usd") is not None:
-                n["cost"] = round((n["cost"] or 0) + r["cost_usd"], 4)
         elif event == "gate":
             n["tier"] = r.get("tier")
             if n["first_gate"] is None:
@@ -105,6 +106,15 @@ def published_heads():
     return ledger.anchors_in(t.get("body", "") for t in texts)
 
 
+def spending(cfg):
+    """Today's spend against the daily budget, and any agent that is paused."""
+    line = (f"Spent today: ${budget.spent_today(cfg):.2f} of ${cfg['daily_budget_usd']} "
+            f"(resets {budget.next_reset(cfg):%Y-%m-%d %H:%M %Z})")
+    for agent, pause in budget.paused().items():
+        line += f"\n{agent} paused until {pause.get('until') or 'ops/stop --clear'}: {pause.get('reason')}"
+    return line
+
+
 def main(argv):
     if "--note" in argv:
         i = argv.index("--note")
@@ -124,6 +134,7 @@ def main(argv):
             print(f"FAIL {problem}")
         print(f"{count} records, head {head[:16]}…, {len(anchors)} published head(s) checked")
         return 1 if problems else 0
+    print(spending(config()))
     rows = summarize(r for _, _, r in ledger.records())
     if not rows:
         return print(f"The audit ledger in {ledger.ledger_dir()} has no node records yet.")

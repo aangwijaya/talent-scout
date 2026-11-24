@@ -221,7 +221,7 @@ class RunRecords(LedgerCase):
             cmd, 1 if cmd[:3] == ["gh", "pr", "view"] else 0, "node/1-x\n", "")
         run.wait_ci = lambda node, branch, cfg: []
         run.independent_review = lambda node, wt, cfg: [{"severity": "Low", "file": "a", "summary": "b"}]
-        run.process(self.node(), {"max_attempts": 3, "automerge": []})
+        run.process(self.node(), {"max_attempts": 3, "automerge": [], "budget_usd": 6, "daily_budget_usd": 20})
 
         events = [r["event"] for _, _, r in ledger.records()]
         self.assertEqual(events, ["run.started", "attempt", "gate", "pr.opened", "ci", "review", "ready"])

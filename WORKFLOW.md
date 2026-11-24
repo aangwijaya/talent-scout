@@ -13,7 +13,7 @@ ops/run --node client#15     # one node only
 ops/auto client#15           # reconcile, then that node with --once --auto in a detached tmux session
 ops/run --reconcile          # after you merge: drop stale labels, remove merged worktrees
 ops/brief client#15          # the exact context a session receives
-ops/stop                     # hand work back and halt; ops/stop --clear to re-enable
+ops/stop                     # hand work back and halt; ops/stop --clear re-enables and ends a quota pause
 ops/report                   # per-node results from the audit ledger, and the tier 1 auto-merge targets
 ops/report --verify          # check the ledger chain and every head published on GitHub
 ops/report --note client#12 intervention "fixed the lint by hand" --by lead
@@ -49,7 +49,26 @@ An issue without a block is reported as unmapped and never runs. `day:N` labels 
 
 On failure the agent gets `EXPECTED / SAW / FENCE / DEAD ENDS` and retries. If the same `SAW` returns twice, or the attempt budget is spent, the node goes to `needs:human`.
 
-Models are pinned in `ops/tiers.yaml`: `claude_model` and `claude_effort` for Claude, `opencode_model` and `opencode_effort` (sent as `--variant`) for OpenCode (`opencode models --verbose` lists the ids). They apply to both the worker and the reviewer role. Each agent call is limited by `timeout_min` and, for OpenCode, by `budget_usd` summed from its cost events. Claude enforces `budget_usd` itself. Outside the worktree, agents may only write `ops/.state/handoff/` with their edit tools and read the Go module cache. Shell commands are not fenced this way.
+Models are pinned in `ops/tiers.yaml`: `claude_model` and `claude_effort` for Claude, `opencode_model` and `opencode_effort` (sent as `--variant`) for OpenCode (`opencode models --verbose` lists the ids). They apply to both the worker and the reviewer role. Each agent call is limited by `timeout_min` and by its share of the budget (below): OpenCode is stopped when its cost events pass it, and Claude enforces it itself. Outside the worktree, agents may only write `ops/.state/handoff/` with their edit tools and read the Go module cache. Shell commands are not fenced this way.
+
+## Budget, quota and one node per repo
+
+`ops/budget.py` keeps unattended runs from spending more than agreed or fighting over a repo.
+
+**Daily budget.** The agents' reported cost of every run today, attempts and reviews, adds up from the audit ledger. It stays under `daily_budget_usd` ($20), and the day starts at 00:00 `budget_tz` (Asia/Jakarta).
+- Each attempt and each review may spend only what is left of the day, and never more than `budget_usd` ($6). So the cap holds inside a run too.
+- When less than $1 is left, no node starts. A node that is between attempts goes back to `status:todo` with `STATUS: paused`, and is not counted as failed.
+- Claude now prints its result as JSON (`--output-format json`), so its cost is recorded like OpenCode's. A Claude run stopped before it finished (time, `ops/stop`) is counted at its whole allowance, the most it could have spent, and the record says `cost_estimated`.
+- Reported cost is what the agent says the run would cost at API prices. On a subscription plan it is a measure of use, not a bill.
+
+**Quota pause.** When an agent's plan or API says the quota is gone ("you've hit your limit", 429, rate limit), the run is handed back and that agent is paused.
+- The pause lasts until the reset the message names, plus 2 minutes, or `quota_pause_min` (60) when it names none.
+- The attempt is given back, so a quota never spends `max_attempts`.
+- The pause holds only that agent. A Claude limit holds client nodes, and OpenCode still runs server nodes.
+- A review that hits the quota pauses the reviewer. The PR still reaches you, marked "review unavailable".
+- `ops/stop --clear` ends every pause early. A balance that ran out (402) is not a quota: it escalates to you as before.
+
+**One node per repo.** `ops/run` holds a lock per repo while a node runs. A second runner for the same repo stops before starting anything, and the ledger records `dispatch.busy`. The kernel drops the lock if a runner dies, so it never goes stale.
 
 ## Tiers: gate by cost of undo
 
@@ -115,8 +134,9 @@ Like the planning skills, they need a human, so a headless agent must never load
 ## Audit ledger
 
 `ops/run` appends one record per step to the audit ledger (`ops/ledger.py`):
-- `run.started`, `attempt` (with cost and refused egress), and `gate` (tier, pass, failed checks);
-- `pr.opened`, `ci`, and `review` (finding and High counts);
+- `run.started`, `attempt` (with cost and refused egress, or why it was stopped), and `gate` (tier, pass, failed checks);
+- `pr.opened`, `ci`, `review.run` (the reviewer's cost), and `review` (finding and High counts);
+- `queue.paused` and `queue.resumed` (which agent, why, until when, and who ended it), and `dispatch.busy`;
 - `ready`, `escalated`, `handed_back`, `parked`, and `merged`, with who merged and which checks were red at the time.
 
 **Where it lives:** `~/.local/state/talent-scout-ops/audit-YYYY-MM.jsonl` (or `$OPS_LEDGER_DIR`). That's outside the repo and outside every sandbox mount, and the files are never deleted.

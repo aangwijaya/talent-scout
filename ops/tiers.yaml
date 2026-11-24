@@ -14,6 +14,12 @@ opencode_model: opencode-go/deepseek-v4.1-flash
 # OpenCode passes effort as --variant; this model offers low, high, max.
 opencode_effort: high
 budget_usd: 6
+# The agents' reported cost of all runs in one day stays under this (ops/budget.py). The day starts at
+# 00:00 in budget_tz. Each run may spend only what is left of it, and never more than budget_usd.
+daily_budget_usd: 20
+budget_tz: Asia/Jakarta
+# When a plan's quota runs out and the message names no reset time, that agent's nodes wait this long.
+quota_pause_min: 60
 timeout_min: 60
 # The independent review gets its own budget, and OpenCode is stopped after this long with no output.
 review_timeout_min: 20

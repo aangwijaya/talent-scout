@@ -23,6 +23,7 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import importlib.machinery
 import importlib.util
 
+import budget
 import container
 import creds
 import identity
@@ -41,7 +42,8 @@ AUTO = "--auto" in sys.argv
 LAST_AGENT_ERROR = None  # the API error that ended the last agent run, if any
 LAST_EGRESS_REFUSED = []  # hosts the sandbox's proxy refused during the last agent run
 REVIEW_UNAVAILABLE = None  # why the last independent review returned no findings
-LAST_COST = None  # what the last agent run reported spending, in USD (OpenCode reports it; Claude -p does not)
+LAST_COST = None  # what the last agent run spent, in USD, as the agent reported it
+LAST_COST_ESTIMATED = False  # True when a stopped Claude run is counted at its whole allowance (it reports only at the end)
 CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm:*)", "Bash(go:*)", "Bash(gofmt:*)",
                 "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)", "Bash(git diff:*)",
                 "Bash(git log:*)", "Bash(git show:*)", "Bash(gh issue view:*)", "Bash(gh issue list:*)",
@@ -68,6 +70,14 @@ AGENT_GIT_CONFIG = [("url.https://github.com/.insteadOf", "git@github.com:"),
 
 class Stop(Exception):
     pass
+
+
+class QuotaHit(Stop):
+    """The agent's plan or API said its quota is gone. The queue pauses; the node is not at fault."""
+
+
+class DailySpent(Stop):
+    """Today's budget is spent. The queue waits for 00:00 in budget_tz; the node is not at fault."""
 
 
 def agent_token(repo, cfg):
@@ -141,9 +151,26 @@ def read_events(lines, seen, log, events):
     log.flush()
 
 
+def claude_result(text, code):
+    """Claude -p --output-format json prints one result object at the end: (reply, cost, error)."""
+    try:
+        result = json.loads(text.strip())
+    except ValueError:
+        result = None
+    if not isinstance(result, dict) or result.get("type") != "result":
+        # Plain text: an older CLI, or a failure before the run started. Its last line says why.
+        lines = [l for l in text.strip().splitlines() if l.strip()]
+        return text, None, (f"claude exited {code}: {lines[-1][:300]}" if code and lines else None)
+    reply = result.get("result") or ""
+    error = None
+    if result.get("is_error") or result.get("subtype", "success") != "success":
+        error = f"claude {result.get('subtype', 'error')}: {reply[:300] or result.get('errors') or 'no detail'}"
+    return reply, result.get("total_cost_usd"), error
+
+
 def run_agent(agent, prompt, wt, cfg, read_only=False):
-    global LAST_AGENT_ERROR, LAST_EGRESS_REFUSED, LAST_COST
-    LAST_AGENT_ERROR, LAST_EGRESS_REFUSED, LAST_COST = None, [], None
+    global LAST_AGENT_ERROR, LAST_EGRESS_REFUSED, LAST_COST, LAST_COST_ESTIMATED
+    LAST_AGENT_ERROR, LAST_EGRESS_REFUSED, LAST_COST, LAST_COST_ESTIMATED = None, [], None, False
     HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
     container.mode(cfg)
     repo = Path(wt).name.split("-")[0]
@@ -154,7 +181,7 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
         tools = ["Read", "Glob", "Grep"] if read_only else CLAUDE_TOOLS
         dirs = [str(HANDOFF_DIR)] + ([go_mod_cache()] if repo == "server" else [])
         cmd = ["claude", "-p", "--model", cfg["claude_model"], "--effort", cfg["claude_effort"],
-               "--max-budget-usd", str(cfg["budget_usd"]), "--no-session-persistence",
+               "--max-budget-usd", str(cfg["budget_usd"]), "--no-session-persistence", "--output-format", "json",
                "--add-dir", *dirs, "--allowedTools", *tools]
         if not read_only:
             cmd += ["--permission-mode", "acceptEdits"]
@@ -216,6 +243,10 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
                 over_budget = agent == "opencode" and seen["cost"] > cfg["budget_usd"]
                 idle = idle_s is not None and time.time() - last_output > idle_s
                 if STOP_FILE.exists() or time.time() > deadline or over_budget or idle:
+                    # What the stopped run spent still counts toward today's budget. Claude reports only
+                    # at the end, so it is counted at its whole allowance, the most it could have spent.
+                    LAST_COST = round(seen["cost"], 4) if agent == "opencode" else float(cfg["budget_usd"])
+                    LAST_COST_ESTIMATED = agent == "claude"
                     os.killpg(child.pid, signal.SIGTERM)
                     child.wait(30)
                     if box_name:
@@ -228,8 +259,11 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
                 if elapsed >= 60 and elapsed % 60 < 3:
                     cost = f", ${seen['cost']:.2f}" if agent == "opencode" else ""
                     print(f"  {agent} working, {elapsed // 60} min{cost} (tail -f {log_path})", flush=True)
-    LAST_AGENT_ERROR = seen.get("error")
-    LAST_COST = round(seen["cost"], 4) if agent == "opencode" else None
+    reply = "\n".join(seen["text"])
+    if agent == "claude":
+        reply, LAST_COST, LAST_AGENT_ERROR = claude_result(reply, child.returncode)
+    else:
+        LAST_AGENT_ERROR, LAST_COST = seen.get("error"), round(seen["cost"], 4)
     refused = LAST_EGRESS_REFUSED = container.save_egress_log(Path(wt).name, started)
     if refused:
         print(f"  egress refused for {Path(wt).name}: {', '.join(refused)} (ops/.state/egress/)", flush=True)
@@ -237,7 +271,9 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
         # The gate, the push and the review read the human's worktree; the agent's commits come
         # back as a bundle with hooks off. Uncommitted changes in the clone stay there.
         container.import_agent_commits(work, wt, repo, cfg)
-    return child.returncode, "\n".join(seen["text"])
+    if budget.quota_hit(LAST_AGENT_ERROR):
+        raise QuotaHit(LAST_AGENT_ERROR)
+    return child.returncode, reply
 
 
 def prepare(node):
@@ -360,7 +396,18 @@ def independent_review(node, wt, cfg):
     # The review gets its own, shorter budget: the work is already built, pushed and green.
     review_cfg = {**cfg, "timeout_min": cfg.get("review_timeout_min", cfg["timeout_min"])}
     try:
-        code, text = run_agent(reviewer, prompt, wt, review_cfg, read_only=True)
+        review_cfg["budget_usd"] = budget.allowance(cfg)
+        try:
+            code, text = run_agent(reviewer, prompt, wt, review_cfg, read_only=True)
+        finally:
+            audit("review.run", node, agent=reviewer, cost_usd=LAST_COST,
+                  cost_estimated=LAST_COST_ESTIMATED or None, error=LAST_AGENT_ERROR)
+    except budget.BudgetSpent as spent:
+        code, text, REVIEW_UNAVAILABLE = 1, "", str(spent)
+    except QuotaHit as hit:
+        # The PR is already green; the queue waits, but this PR still reaches the human.
+        until = budget.pause_for_quota(reviewer, str(hit), cfg)
+        code, text, REVIEW_UNAVAILABLE = 1, "", f"{hit}; {reviewer} is paused until {until:%Y-%m-%d %H:%M %Z}"
     except Stop as stop:
         if STOP_FILE.exists():
             raise
@@ -387,10 +434,23 @@ def process(node, cfg):
     while True:
         if state["attempts"] >= cfg["max_attempts"]:
             return escalate(node, "attempt budget spent", note or "")
+        try:
+            allowance = budget.allowance(cfg)
+        except budget.BudgetSpent as spent:
+            raise DailySpent(str(spent))
         state["attempts"] += 1
         save_state(node.id, state)
         handoff_file.unlink(missing_ok=True)
-        run_agent(node.agent, _brief.build(node, note), wt, cfg)
+        try:
+            run_agent(node.agent, _brief.build(node, note), wt, {**cfg, "budget_usd": allowance})
+        except Stop as stop:
+            audit("attempt", node, attempt=state["attempts"], agent=node.agent, cost_usd=LAST_COST,
+                  cost_estimated=LAST_COST_ESTIMATED or None, stopped=str(stop)[:300])
+            if isinstance(stop, QuotaHit):
+                # Not the node's fault: the attempt is given back, so a quota can't spend max_attempts.
+                state["attempts"] -= 1
+                save_state(node.id, state)
+            raise
         if LAST_EGRESS_REFUSED:
             # A refusal is not a failure: the agent got an error and went on. It shows up in the retry's
             # DEAD ENDS, the posted handoff and ops/triage, where the human decides.
@@ -401,7 +461,7 @@ def process(node, cfg):
             save_state(node.id, state)
         text = handoff_file.read_text() if handoff_file.exists() else ""
         audit("attempt", node, attempt=state["attempts"], agent=node.agent, cost_usd=LAST_COST,
-              status=parse_handoff(text).get("STATUS", "").split(" ")[0] or None,
+              cost_estimated=LAST_COST_ESTIMATED or None, status=parse_handoff(text).get("STATUS", "").split(" ")[0] or None,
               error=LAST_AGENT_ERROR, egress_refused=LAST_EGRESS_REFUSED or None)
         if not text and LAST_AGENT_ERROR:
             # Retrying cannot help while the API refuses every call.
@@ -556,6 +616,45 @@ def check_sandbox(repos=REPOS):
     return 0 if ok else 1
 
 
+def queue_held(cfg):
+    """Why no node may start now, or None: today's budget is spent (a quota pause holds only its agent)."""
+    try:
+        budget.allowance(cfg)
+    except budget.BudgetSpent as spent:
+        return f"queue held: {spent}"
+    return None
+
+
+def split_paused(ready, nodes, pauses):
+    """(startable, waiting): a node waits while its agent is paused, or every node does if the pause file
+    can't be read."""
+    waiting = [k for k in ready if nodes[k].agent in pauses or "unknown" in pauses]
+    return [k for k in ready if k not in waiting], waiting
+
+
+def describe_pauses(pauses):
+    return "; ".join(f"{agent} paused ({p.get('kind')}) until {p.get('until') or 'ops/stop --clear'}: {p.get('reason')}"
+                     for agent, p in pauses.items())
+
+
+def hand_back(node, stop, cfg):
+    """Give an interrupted node back to the queue. A quota or the daily budget pauses the queue, not the node."""
+    if isinstance(stop, QuotaHit):
+        until = budget.pause_for_quota(node.agent, str(stop), cfg)
+        next_step = (f"{node.agent} nodes resume by themselves after {until:%Y-%m-%d %H:%M %Z}; "
+                     f"`ops/stop --clear` resumes it sooner")
+        status = "paused"
+    elif isinstance(stop, DailySpent):
+        next_step = f"the queue resumes after 00:00 {cfg.get('budget_tz', 'Asia/Jakarta')}"
+        status = "paused"
+    else:
+        next_step, status = f"resume with ops/run --node {node.id}", "needs_human"
+    audit("handed_back", node, reason=str(stop)[:300], paused=status == "paused" or None)
+    post_handoff(node, f"STATUS: {status}\nNEXT: {next_step}\nKNOWN: {stop}")
+    set_status(node, "status:todo")
+    print(f"{node.id}: handed back: {stop}")
+
+
 def main():
     argv = sys.argv
     if "--check-agent-auth" in argv:
@@ -572,6 +671,10 @@ def main():
     if check_sandbox([repo] if repo else list(REPOS)):
         raise SystemExit("sandbox check failed; see above. Nothing ran.")
     while not STOP_FILE.exists():
+        held = queue_held(cfg)
+        if held:
+            print(held)
+            return
         # Only the client runner owns the contract pin; exit 1 is drift, other codes are errors.
         if (repo or (only or "").split("#")[0]) != "server" and sh([str(OPS / "contract-sync"), "--check"], check=False).returncode == 1:
             confirm("The server contract moved. Open the client sync PR")
@@ -581,18 +684,22 @@ def main():
         graph = analyze(nodes)
         ready = [k for k in graph["ready"] if nodes[k].agent in ("claude", "opencode")]
         ready = [k for k in ready if (k == only if only else (not repo or nodes[k].repo == repo))]
+        pauses = budget.paused()
+        ready, waiting = split_paused(ready, nodes, pauses)
         if not ready:
-            print("nothing ready")
+            print(describe_pauses(pauses) if waiting else "nothing ready")
             return
         node = nodes[ready[0]]
         try:
-            confirm(f"Start {node.id}: {node.title}")
-            process(node, cfg)
+            with budget.repo_lock(node.repo):
+                confirm(f"Start {node.id}: {node.title}")
+                process(node, cfg)
+        except budget.Busy as busy:
+            # Nothing started, so nothing is handed back; the other runner owns this repo for now.
+            audit("dispatch.busy", node, reason=str(busy))
+            raise SystemExit(f"{node.id}: not started: {busy}")
         except Stop as stop:
-            audit("handed_back", node, reason=str(stop)[:300])
-            post_handoff(node, f"STATUS: needs_human\nNEXT: resume with ops/run --node {node.id}\nKNOWN: {stop}")
-            set_status(node, "status:todo")
-            print(f"{node.id}: handed back: {stop}")
+            hand_back(node, stop, cfg)
             return
         if "--once" in argv or only:
             return
