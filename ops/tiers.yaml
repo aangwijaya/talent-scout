@@ -4,8 +4,12 @@ tier3: [docs/API.md, docs/EVENTS.md, docs/PRD.md, api/openapi.yaml, contract.loc
 tier1: [*.md, docs/*, *.test.ts, *.spec.ts, *.e2e.ts, *_test.go, testdata/*]
 # Always allowed outside a node's fence.
 always_allowed: [docs/LESSONS.md, pnpm-lock.yaml, go.sum, go.mod, package.json]
-# Pilot: nothing merges by itself. Open tier 1, then tier 2, after the pilot targets pass.
-automerge: []
+# Tiers that merge by themselves into the integration branch after green CI, a review with no High and the
+# verifier's `merge` verdict (ADR 0008). Never tier 3, and never while integration_branch is main.
+automerge: [1, 2]
+# Where nodes start and merge. `dev` once the app repos have it (WORKFLOW.md, "Integration branch and
+# releases"); main until then, and nothing merges by itself into main.
+integration_branch: main
 # Models per agent. Claude works on the client and reviews the server; OpenCode does the reverse.
 claude_model: claude-opus-5-5
 claude_effort: medium
@@ -23,6 +27,9 @@ quota_pause_min: 60
 timeout_min: 60
 # The independent review gets its own budget, and OpenCode is stopped after this long with no output.
 review_timeout_min: 20
+# The verifier runs after the review, in its own copy of the branch, and sabotages the tests.
+verifier_agent: claude
+verify_timeout_min: 30
 idle_min: 10
 max_attempts: 3
 ci_wait_min: 20

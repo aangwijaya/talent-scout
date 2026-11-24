@@ -5,7 +5,9 @@ ops/report                         one row per node, then the tier 1 auto-merge 
 ops/report --verify                check the chain, and that every head published on GitHub is still in it
 ops/report --verify --offline      check the chain only
 ops/report --note NODE KIND TEXT [--by lead|human]
-                                   record what a person did; KIND is intervention or escaped-high
+                                   record what a person did; KIND is intervention or escaped-high.
+                                   An escaped-high also turns tier 2 auto-merge off (ADR 0008).
+ops/report --automerge on          turn tier 2 auto-merge back on after an escaped High
 """
 import json
 import sys
@@ -14,6 +16,7 @@ from datetime import datetime
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import budget
 import ledger
+import merge_policy
 from lib import REPOS, config, gh
 
 NOTE_KINDS = ("intervention", "escaped-high")
@@ -110,6 +113,8 @@ def spending(cfg):
     """Today's spend against the daily budget, and any agent that is paused."""
     line = (f"Spent today: ${budget.spent_today(cfg):.2f} of ${cfg['daily_budget_usd']} "
             f"(resets {budget.next_reset(cfg):%Y-%m-%d %H:%M %Z})")
+    for tier, reason in merge_policy.held().items():
+        line += f"\ntier {tier} auto-merge off: {reason} (ops/report --automerge on)"
     for agent, pause in budget.paused().items():
         line += f"\n{agent} paused until {pause.get('until') or 'ops/stop --clear'}: {pause.get('reason')}"
     return line
@@ -126,7 +131,17 @@ def main(argv):
             raise SystemExit(f"KIND must be one of {', '.join(NOTE_KINDS)}")
         by = argv[argv.index("--by") + 1] if "--by" in argv else "human"
         record = ledger.append("note", actor=by, node=node, kind=kind, text=text[:500])
-        return print(f"recorded seq {record['seq']}: {node} {kind}")
+        print(f"recorded seq {record['seq']}: {node} {kind}")
+        if kind == "escaped-high":
+            # ADR 0008: one escaped High is enough to stop trusting tier 2 to merge by itself.
+            merge_policy.escaped_high(node, text, by=by)
+            print("tier 2 auto-merge is off until `ops/report --automerge on`")
+        return
+    if "--automerge" in argv:
+        if argv[argv.index("--automerge") + 1:argv.index("--automerge") + 2] != ["on"]:
+            raise SystemExit("usage: ops/report --automerge on")
+        print("tier 2 auto-merge is back on" if merge_policy.turn_on() else "auto-merge was not off")
+        return
     if "--verify" in argv:
         anchors = [] if "--offline" in argv else published_heads()
         problems, count, head = ledger.verify(anchors=anchors)

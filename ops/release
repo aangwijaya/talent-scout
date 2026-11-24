@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""A release (GLOSSARY): the integration branch into `main`, through one PR the human merges (ADR 0008).
+
+ops/release server                  check the release conditions and print the PR body
+ops/release server --open [--summary FILE]
+                                    open the release PR; FILE is the lead agent's summary, placed on top
+
+The body lists every node since the last release with its tier, the review, the verifier's verdict and
+cost from the audit ledger, so the human reads one table instead of the combined diff. Release the server
+before the client: the client's contract.lock must point at server code that is already in main.
+"""
+import json
+import re
+import sys
+from datetime import date
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import ledger
+from lib import RELEASE_BRANCH, REPOS, ROOT, config, gh, integration, sh
+
+LIVE_GATE = re.compile(r"^(internal/prompts/|internal/graph/|config/models\.yaml)")
+MIGRATION = re.compile(r"^internal/store/migrations/")
+OK_RUNS = ("success", "skipped", "neutral")
+
+
+def pending_prs(repo, cfg):
+    """PRs merged into the integration branch whose merge commit is not in main yet."""
+    checkout = ROOT / f"talent-scout-{repo}"
+    sh(["git", "fetch", "-q", "origin"], cwd=checkout)
+    commits = set(sh(["git", "rev-list", f"origin/{RELEASE_BRANCH}..origin/{integration(cfg)}"],
+                     cwd=checkout).stdout.split())
+    prs = json.loads(gh("pr", "list", "-R", REPOS[repo], "--state", "merged", "--base", integration(cfg),
+                        "--limit", "200", "--json", "number,title,headRefName,mergeCommit,mergedAt,files") or "[]")
+    return sorted((p for p in prs if (p.get("mergeCommit") or {}).get("oid") in commits), key=lambda p: p["mergedAt"])
+
+
+def node_facts(node_id, records):
+    """What the ledger says about one node: tier, review, verifier, cost and who merged it."""
+    facts = {"tier": None, "review": "-", "verdict": "-", "cost": 0.0, "merged_by": "-", "escaped": 0}
+    for r in records:
+        if r.get("node") != node_id:
+            continue
+        if r.get("cost_usd"):
+            facts["cost"] += r["cost_usd"]
+        event = r["event"]
+        if event == "gate" and r.get("tier"):
+            facts["tier"] = r["tier"]
+        elif event == "review":
+            facts["review"] = f"{r.get('findings', 0)} findings, {r.get('high', 0)} High" if r.get("available") \
+                else "unavailable"
+        elif event == "verify":
+            facts["verdict"] = r.get("verdict") or "unavailable"
+        elif event == "merged":
+            facts["merged_by"] = r.get("by") or "-"
+        elif event == "note" and r.get("kind") == "escaped-high":
+            facts["escaped"] += 1
+    return facts
+
+
+def ci_red(repo, cfg):
+    """Check runs on the integration branch's head that did not pass."""
+    runs = json.loads(gh("api", f"repos/{REPOS[repo]}/commits/{integration(cfg)}/check-runs",
+                         "--jq", "[.check_runs[] | {name, status, conclusion}]") or "[]")
+    if not runs:
+        return ["no check runs on the integration branch head"]
+    return [f"{r['name']} ({r['conclusion'] or r['status']})" for r in runs if r.get("conclusion") not in OK_RUNS]
+
+
+def contract_released(cfg):
+    """The client may release only once the server commit its contract.lock pins is in the server's main."""
+    client = ROOT / "talent-scout-client"
+    server = ROOT / "talent-scout-server"
+    sh(["git", "fetch", "-q", "origin"], cwd=server)
+    lock = sh(["git", "show", f"origin/{integration(cfg)}:contract.lock"], cwd=client, check=False)
+    if lock.returncode:
+        return "the client has no contract.lock on the integration branch"
+    pinned = json.loads(lock.stdout).get("server_commit", "")
+    released = not sh(["git", "merge-base", "--is-ancestor", pinned, f"origin/{RELEASE_BRANCH}"], cwd=server,
+                      check=False).returncode
+    return None if released else f"server {pinned[:8]} (pinned by contract.lock) is not in the server's main yet"
+
+
+def body(repo, cfg, prs, summary=""):
+    records = [r for _, _, r in ledger.records()]
+    rows, files = [], set()
+    for p in prs:
+        number = p["headRefName"].split("/")[1].split("-")[0] if p["headRefName"].startswith("node/") else None
+        node_id = f"{repo}#{number}" if number else None
+        f = node_facts(node_id, records) if node_id else {"tier": None, "review": "-", "verdict": "-", "cost": 0.0,
+                                                          "merged_by": "-", "escaped": 0}
+        files |= {x["path"] for x in p.get("files") or []}
+        rows.append(f"| #{p['number']} | {('#' + number) if number else '-'} | {p['title']} | {f['tier'] or '-'} "
+                    f"| {f['review']} | {f['verdict']}{' ⚠️ escaped High' if f['escaped'] else ''} "
+                    f"| {f['merged_by']} | ${f['cost']:.2f} |")
+    steps = []
+    if any(LIVE_GATE.match(x) for x in files):
+        steps.append("- [ ] Live gate: prompts, graph or models changed. Run three real CVs before merging.")
+    if any(MIGRATION.match(x) for x in files):
+        steps.append("- [ ] After the deploy: run the new migrations in production (tried on schema `test` first).")
+    steps.append("- [ ] After the deploy: smoke test production.")
+    seq, head = ledger.head()
+    top = [summary.strip(), ""] if summary.strip() else []
+    return "\n".join([
+        *top,
+        f"Release of `{integration(cfg)}` into `{RELEASE_BRANCH}`: {len(prs)} PR(s).", "",
+        "| PR | Node | Title | Tier | Review | Verifier | Merged by | Cost |", "|---|---|---|---|---|---|---|---|",
+        *rows, "", "Before and after merging:", *steps, "",
+        f"Audit ledger head: seq {seq}, sha256 {head[:16]}… (`ops/report --verify` checks it).",
+        ledger.anchor(), "", "🤖 Generated with [Claude Code](https://claude.com/claude-code)"]).strip() + "\n"
+
+
+def main(argv):
+    if len(argv) < 2 or argv[1] not in REPOS:
+        raise SystemExit("usage: ops/release server|client [--open [--summary FILE]]")
+    repo, cfg = argv[1], config()
+    if integration(cfg) == RELEASE_BRANCH:
+        raise SystemExit(f"integration_branch is {RELEASE_BRANCH}: there is nothing to release yet")
+    problems = [f"CI on {integration(cfg)}: {x}" for x in ci_red(repo, cfg)]
+    if repo == "client":
+        problems += [p for p in [contract_released(cfg)] if p]
+    prs = pending_prs(repo, cfg)
+    if not prs:
+        problems.append(f"nothing in {integration(cfg)} that is not in {RELEASE_BRANCH}")
+    summary = open(argv[argv.index("--summary") + 1]).read() if "--summary" in argv else ""
+    text = body(repo, cfg, prs, summary)
+    if problems or "--open" not in argv:
+        print(text)
+        for p in problems:
+            print(f"NOT READY: {p}")
+        return 1 if problems else 0
+    url = gh("pr", "create", "-R", REPOS[repo], "--base", RELEASE_BRANCH, "--head", integration(cfg),
+             "--title", f"Release {repo} {date.today():%Y-%m-%d}", "--body", text).strip()
+    ledger.append("release.opened", actor="lead", repo=repo, url=url, prs=[p["number"] for p in prs])
+    print(f"opened {url}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv) or 0)

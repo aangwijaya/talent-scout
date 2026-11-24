@@ -70,7 +70,7 @@ Sebagian besar komponen workflow ini sudah lazim di industri, tapi cara kita mer
 | 2 | Orchestrator sebagai service | **Dikerjakan** sebagai systemd user service di PC ini, bukan VPS. Dispatch lewat label `run` yang dicek pelakunya (ADR 0007). |
 | 3 | Audit log terpusat | **Dikerjakan** sebagai audit ledger berantai hash, dengan head yang dipublikasikan di setiap PR. Tanpa SIEM. |
 | 4 | Broker secret | **Dikerjakan sebagian.** GitHub App dengan token per run dan `systemd-creds` (ADR 0006). Vault dilewati karena mesinnya hanya satu. |
-| 5 | Auto-merge tier 1 | **Ditunda ke PR F**, yaitu auto-merge ke branch `dev`, sementara rilis ke `main` tetap oleh saya. |
+| 5 | Auto-merge tier 1 | **Dikerjakan dalam bentuk lain:** tier 1–2 auto-merge ke branch integrasi `dev` setelah CI, review dan verifier otomatis. Rilis ke `main` tetap oleh saya (ADR 0008). Staging dilewati karena butuh service kedua. |
 | 6 | CODEOWNERS dan review bertingkat | **Dilewati.** Manusianya hanya satu, jadi ruleset dengan approval wajib sudah cukup. |
 | 7 | Paralelisme dan kuota | **Dikerjakan.** Satu node per repo, budget harian $20, dan jeda saat kuota habis. Akun Claude kedua dilewati. |
 | 8 | Policy-as-code | **Dikerjakan tanpa OPA**, sebagai policy test di CI yang membaca file aturan aslinya. |
