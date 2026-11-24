@@ -574,6 +574,8 @@ class ContractSync(unittest.TestCase):
 
         sync.sh = fake_sh
         sync.gh = lambda *a: open_pr if a[:2] == ("pr", "list") else ""
+        sync.config = lambda: {}
+        sync.run_code = lambda command, *a, **k: calls.append(command) or subprocess.CompletedProcess(command, 0, "", "")
         old = sys.argv
         sys.argv = ["contract-sync", *args]
         try:
@@ -591,9 +593,10 @@ class ContractSync(unittest.TestCase):
         code, _ = self.run_sync("", "--check")
         self.assertEqual(code, 1)
 
-    def test_the_sync_pr_regenerates_the_api_types_before_committing(self):
+    def sync_into_tmp(self, pnpm_code=0):
+        """Run a full sync against a temporary ROOT. Returns (main's result or exception, sh calls, run_code calls)."""
         sync = load_script("contract-sync")
-        calls = []
+        calls, sandboxed = [], []
         with tempfile.TemporaryDirectory() as tmp:
             def fake_sh(cmd, cwd=None, check=True, env=None):
                 calls.append(cmd)
@@ -605,19 +608,48 @@ class ContractSync(unittest.TestCase):
                     out = json.dumps({"files": {}})
                 return subprocess.CompletedProcess(cmd, 0, out, "")
 
+            def fake_run_code(command, cwd, repo, cfg, timeout=None):
+                sandboxed.append((command, cwd, repo, timeout))
+                calls.append(("sandbox", command))
+                return subprocess.CompletedProcess(command, pnpm_code, "", "ERR_PNPM_OUTDATED_LOCKFILE")
+
             sync.ROOT, sync.sh, sync.gh = Path(tmp), fake_sh, lambda *a: ""
+            sync.run_code, sync.config = fake_run_code, lambda: {"sandbox": "podman"}
             old = sys.argv
             sys.argv = ["contract-sync"]
             try:
-                self.assertEqual(sync.main(), 0)
+                result = sync.main()
+            except RuntimeError as error:
+                result = error
             finally:
                 sys.argv = old
+            wt = str(Path(tmp) / "wt" / "client-contract-abcdef12")
+        return result, calls, sandboxed, wt
+
+    def test_the_sync_pr_regenerates_the_api_types_before_committing(self):
+        result, calls, _, _ = self.sync_into_tmp()
+        self.assertEqual(result, 0)
         # CI fails the PR when schema.d.ts lags openapi.yaml, so the types are regenerated before the commit.
-        install = calls.index(["pnpm", "install", "--frozen-lockfile"])
-        gen = calls.index(["pnpm", "gen:api"])
+        install = calls.index(("sandbox", "pnpm install --frozen-lockfile"))
+        gen = calls.index(("sandbox", "pnpm gen:api"))
         add = calls.index(["git", "add", "-A"])
         self.assertLess(install, gen)
         self.assertLess(gen, add)
+
+    def test_pnpm_runs_in_the_client_sandbox_never_on_the_host(self):
+        # pnpm install runs lifecycle scripts and gen:api is a client script: client code (ADR 0002).
+        _, calls, sandboxed, wt = self.sync_into_tmp()
+        self.assertEqual(sandboxed, [("pnpm install --frozen-lockfile", wt, "client", 600),
+                                     ("pnpm gen:api", wt, "client", 600)])
+        host = [c for c in calls if isinstance(c, list)]
+        self.assertFalse(any("pnpm" in " ".join(c) for c in host))
+
+    def test_a_failed_sandbox_step_stops_before_the_commit_with_its_stderr(self):
+        result, calls, sandboxed, _ = self.sync_into_tmp(pnpm_code=1)
+        self.assertIsInstance(result, RuntimeError)
+        self.assertIn("ERR_PNPM_OUTDATED_LOCKFILE", str(result))
+        self.assertEqual(len(sandboxed), 1)
+        self.assertFalse(any(c[:2] == ["git", "commit"] for c in calls if isinstance(c, list)))
 
 
 class Reconcile(unittest.TestCase):
