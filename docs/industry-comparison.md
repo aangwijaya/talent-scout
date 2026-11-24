@@ -62,6 +62,39 @@ Sebagian besar komponen workflow ini sudah lazim di industri, tapi cara kita mer
 | 8 | **Policy-as-code** | Aturan bisa diaudit dan dites | Tier, fence, allowlist egress, dan batas sumber daya ditulis sebagai policy (misalnya OPA/Rego) dan dicek di CI |
 | 9 | **Eval berkelanjutan** | Mengukur mutu agent dari waktu ke waktu | Metrik per node: persentase lolos gate di percobaan pertama, temuan High yang lolos, gap yang ketahuan di Scope, dan biaya per node |
 
+## Kapan naik level
+
+Pemicunya sinyal, bukan tanggal. Naik level sebaiknya dipicu oleh masalah nyata, bukan karena "enterprise terdengar lebih bagus".
+
+### Pemicu per langkah
+
+| Pemicu yang dialami | Langkah yang tepat |
+|---|---|
+| Ada **orang lain** (rekan tim, klien) yang ikut memakai atau memercayai sistem ini | Audit log terpusat, broker secret, GitHub App menggantikan PAT, CODEOWNERS |
+| Kode atau data yang diproses agent mulai **sensitif atau milik klien**, atau ada kewajiban compliance | Sandbox microVM/gVisor, broker secret, audit log. Wajib **sebelum** menerima data klien, bukan sesudahnya. |
+| Laptop atau WSL menjadi **penghambat**: run berhenti karena mesin mati, atau node perlu jalan semalaman | Orchestrator dipindah ke server atau CI |
+| Lebih dari **~2–3 node paralel**, atau kuota agent sering habis | Antrean dengan batas konkurensi, dan akun atau key terpisah untuk agent dan untuk lead agent |
+| **Merge manusia menjadi bottleneck**: PR hijau menumpuk berhari-hari | Auto-merge tier 1, lalu review bertingkat |
+| Aturan (tier, allowlist, fence) sering berubah dan **sulit diaudit** | Policy-as-code |
+| Perlu **membuktikan** ke orang lain bahwa agent makin baik atau makin murah | Eval berkelanjutan (metrik per node) |
+
+### Syarat sebelum naik level apa pun
+
+Supaya yang diskalakan adalah proses yang sudah stabil:
+1. Target pilot di `WORKFLOW.md` terpenuhi: rata-rata kurang dari satu intervensi manusia per node tier 1–2, tidak ada temuan High yang lolos, dan sebagian besar gap ketahuan di tahap Scope.
+2. Test suite dan CI stabil, tanpa test yang flaky.
+3. Ada data minimal beberapa minggu: biaya per node, waktu per node, dan berapa node yang dieskalasi.
+
+Tanpa ketiganya, naik level hanya memperbesar masalah yang sama.
+
+### Penilaian untuk Talent Scout (2026-11-23)
+
+- **Belum perlu naik level secara keseluruhan.** Proyek ini masih satu orang, datanya demo atau milik sendiri, dan pilot sandbox baru selesai.
+- **Sudah masuk akal sekarang,** karena murah dan langsung terasa:
+  - **auto-merge tier 1**, setelah beberapa node berikutnya lolos tanpa intervensi;
+  - **akun atau key terpisah untuk agent**, karena kuota yang dipakai bersama sudah dua kali menghentikan run (client#88, client#12).
+- **Tunggu pemicunya** untuk microVM, server, audit, dan broker secret, terutama begitu ada data klien atau orang lain yang ikut memakai sistem ini.
+
 ## Yang tetap dipertahankan saat naik level
 
 - Orchestrator tetap kode, bukan LLM (ADR 0001).
