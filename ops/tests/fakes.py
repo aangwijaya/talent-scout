@@ -71,6 +71,8 @@ def git_worktree(root, name="server-9"):
 
 def sandbox_for_tests(tmp):
     """Point the sandbox at fakes under tmp: podman, proxy dir, clones and a Claude token."""
+    # Tests write their audit records here, never into the human's ledger.
+    os.environ["OPS_LEDGER_DIR"] = str(Path(tmp, "ledger"))
     container.PODMAN, _ = fake_podman(tmp)
     container.EGRESS_DIR = Path(tmp, "egress")
     container.CLONES = Path(tmp, "clones")
