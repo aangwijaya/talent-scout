@@ -66,6 +66,18 @@ _Avoid_: CI (CI is GitHub's run on the PR), validation
 How costly a change is to undo, computed from its paths; it decides who must approve the merge.
 _Avoid_: risk level, priority
 
+**Dispatch**:
+The human's signal that one node may run now; the orchestrator starts a node only on a dispatch from the human.
+_Avoid_: trigger, kick off, schedule
+
+**Integration branch**:
+The branch nodes merge into, by themselves when their tier allows; production never deploys from it.
+_Avoid_: dev (the branch's name, not the role), staging
+
+**Release**:
+The human-merged change that moves the integration branch into the branch production deploys from.
+_Avoid_: deploy, promotion, sync
+
 **Live gate**:
 A run of the real product graph against real models, started by the human, to check prompt or model changes.
 _Avoid_: smoke test, eval
@@ -87,3 +99,13 @@ _Avoid_: worktree (the human's checkout), fork
 **Warm cache**:
 The read-only dependency cache the orchestrator fills on the host and the sandbox reads; anything a run downloads beyond it is discarded with the run.
 _Avoid_: shared cache, module cache
+
+## Oversight
+
+**Audit ledger**:
+The append-only, tamper-evident record of what the orchestrator did and decided: dispatches, runs, gates, costs, refusals and merges.
+_Avoid_: log (a run's own output), history
+
+**Policy test**:
+A test of the control plane's own rules (tiers, the egress allowlist, limits) that fails when a change loosens one past its bound.
+_Avoid_: lint, config check

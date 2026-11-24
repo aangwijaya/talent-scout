@@ -5,6 +5,7 @@ runs on the host. The egress proxy (stage 3) and the agent clone (stage 4) are n
 """
 import hashlib
 import os
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -124,6 +125,9 @@ def warm_caches(repo):
         if GO_BUILD_CACHE.is_dir():
             out.append(("GOCACHE", str(GO_BUILD_CACHE), str(GO_BUILD_CACHE)))
         return out
+    # A host without pnpm has no store to share, like a host without a Go module cache above.
+    if not shutil.which("pnpm"):
+        return []
     store = subprocess.run(["pnpm", "store", "path"], capture_output=True, text=True).stdout.strip()
     if not store or not Path(store).is_dir():
         return []
