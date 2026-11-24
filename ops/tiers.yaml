@@ -24,3 +24,11 @@ ci_wait_min: 20
 sandbox_cpus: 4
 sandbox_memory: 6g
 sandbox_pids: 1024
+# Who acts on GitHub (ADR 0006). legacy: the agent's fine-grained token and the human's gh login.
+# apps: installation tokens of the ts-agent and ts-orchestrator GitHub Apps, minted per run, expiring in an hour.
+github_identity: legacy
+agent_app_id: 0
+orchestrator_app_id: 0
+# Where the orchestrator's secrets live (ADR 0006). files: plain files under ops/env.
+# creds: encrypted with systemd-creds --user under ~/.config/talent-scout-ops/secrets (ops/creds).
+secret_store: files

@@ -84,8 +84,29 @@ def run_code(command, cwd, repo, cfg, timeout=None, extra_mounts=()):
     container.mode(cfg)
     return container.run_code(command, cwd, repo, cfg, timeout=timeout, extra_mounts=extra_mounts)
 
+def gh_env(cfg=None):
+    """The environment for the orchestrator's own gh and git calls: the human's login (legacy), or a
+    short-lived ts-orchestrator token for both repos (ADR 0006)."""
+    import identity
+    cfg = cfg or config()
+    if identity.mode(cfg) == "legacy":
+        return None
+    return {**os.environ, "GH_TOKEN": identity.token("orchestrator", list(REPOS.values()), cfg),
+            "GH_PROMPT_DISABLED": "1", "GIT_TERMINAL_PROMPT": "0"}
+
+
 def gh(*args):
-    return sh(["gh", *args]).stdout
+    return sh(["gh", *args], env=gh_env()).stdout
+
+
+def push_argv(full, branch, cfg=None):
+    """git push for a node branch. Legacy: the origin remote and the human's SSH key. Apps: HTTPS with the
+    orchestrator token, which gh hands to git as a credential helper; the token is never in argv."""
+    import identity
+    if identity.mode(cfg or config()) == "legacy":
+        return ["git", "push", "-q", "-u", "origin", "HEAD"]
+    return ["git", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
+            "push", "-q", f"https://github.com/{full}.git", f"HEAD:refs/heads/{branch}"]
 
 
 def flat_yaml(text):

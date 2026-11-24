@@ -169,9 +169,12 @@ Day to day:
 
 ## Agent GitHub token
 
+This is the legacy setup (`github_identity: legacy`). The GitHub Apps section below replaces it.
+
+
 Agents never use your `gh` login. `ops/run` gives them their own token and an allowlisted env (`AGENT_ENV_KEEP` in `ops/run`); everything else in your shell, such as database URLs and API keys, is dropped.
 
-- **Scope:** a fine-grained token for `talent-scout-client` and `talent-scout-server` only, with Issues read/write and Metadata read. No Contents, Pull requests or Workflows access. Agents can read and file issues; GitHub itself refuses their pushes. Pushing, opening PRs and merging stay with `ops/run`, which uses your `gh`.
+- **Scope:** a fine-grained token for `talent-scout-client` and `talent-scout-server` only, with Issues read/write and Metadata read. No Contents, Pull requests or Workflows access. Agents can read and file issues; GitHub itself refuses their pushes. Pushing, opening PRs and merging stay with `ops/run`, which uses your `gh` (or the `ts-orchestrator` App once `github_identity: apps`, see below).
 - **Where:** `ops/env/agent.gh-token`, gitignored, mode 600. `ops/run` refuses to start an agent without it, or if it is not a `github_pat_` token.
 - **Save it** without it showing on screen or in shell history:
 
@@ -180,3 +183,48 @@ Agents never use your `gh` login. `ops/run` gives them their own token and an al
   ```
 - **Check it:** `ops/run --check-agent-auth` must print "read issues ok" and "push refused by GitHub (403)" for both repos.
 - **Rotate** before it expires (90 days): generate a new token with the same scope, save it the same way, run the check, then delete the old token on GitHub.
+
+## GitHub Apps and encrypted secrets
+
+`ops/tiers.yaml` sets two switches (ADR 0006):
+- **`github_identity`:** `legacy` uses the agent token above and your `gh` login. `apps` uses short-lived tokens of two GitHub Apps.
+- **`secret_store`:** `files` reads plain files under `ops/env`. `creds` reads files encrypted with `systemd-creds --user` under `~/.config/talent-scout-ops/secrets`.
+
+### One-time setup (human)
+
+1. **Create the App `ts-agent`.** Go to GitHub, then Settings, Developer settings, GitHub Apps, New GitHub App.
+   - **Homepage URL:** the control-plane repo URL.
+   - **Webhook:** turn off "Active".
+   - **Repository permissions:** Issues **Read and write**. Metadata becomes read-only by itself. Nothing else.
+   - **Where can this App be installed:** Only on this account.
+   - Create the App, and note its **App ID**.
+   - **Generate a private key.** A `.pem` file downloads.
+2. **Create the App `ts-orchestrator`** the same way, with these repository permissions:
+   - Contents **Read and write**;
+   - Pull requests **Read and write**;
+   - Issues **Read and write**;
+   - Checks **Read-only**;
+   - Commit statuses **Read-only**.
+
+   Leave Workflows and Administration at **No access**. Note its App ID, and generate its private key.
+3. **Install both Apps** (App page, then Install App) on **only** `talent-scout-client` and `talent-scout-server`.
+4. **Encrypt the secrets.** `--remove` deletes each plain file once it decrypts back the same:
+
+   ```bash
+   ops/creds import agent-app-key ~/Downloads/ts-agent.*.private-key.pem --remove
+   ops/creds import orchestrator-app-key ~/Downloads/ts-orchestrator.*.private-key.pem --remove
+   ops/creds import claude-oauth-token ops/env/claude.oauth-token --remove
+   ops/creds import client-env-agent ops/env/client.env.agent --remove
+   ops/creds check
+   ```
+5. **Switch.** In `ops/tiers.yaml`, set `github_identity: apps`, the two App IDs, and `secret_store: creds`. The policy tests then require both IDs, and require `creds` while on `apps`.
+6. **Check.** `ops/run --check-agent-auth` must still print "read issues ok" and "push refused by GitHub (403)" for both repos. `ops/run --check-sandbox` must show the secret and ledger directories as hidden.
+7. **Clean up** once a node has run on the Apps:
+   - delete the old fine-grained token on GitHub, and `ops/env/agent.gh-token`;
+   - in each repo's `main` ruleset, require 1 approval, and give the bypass for you to pull requests only.
+
+### What changes in daily use
+
+- **PRs come from `ts-orchestrator[bot]`.** You approve them, then merge.
+- **The orchestrator can't edit CI or branch rules.** A node that needs that is escalated to you.
+- **Not covered here:** OpenCode's own login (`~/.local/share/opencode/auth.json`) stays where OpenCode keeps it. The sandbox still gets only a throwaway copy of it per run.
