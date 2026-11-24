@@ -342,6 +342,7 @@ every poll_sec (90 s):
 - **Policy tests in CI:** the tier, egress, budget and dispatch rules fail CI when a change loosens them past their bounds.
 - **Kept on purpose without:** microVMs (rootless Podman stays the sandbox), a VPS, a vault, OPA and a SIEM. Each is the next step when the trigger in `docs/industry-comparison.md` fires, not before.
 - **Keepalive on WSL:** a Windows scheduled task at login keeps the distro running, and the PC does not sleep on power.
+- **Integration branch:** nodes merge by themselves into `dev` (tier 1–2, after CI, a review with no High and the verifier's `merge`), and production changes only through a release PR the human merges (ADR 0008). The verifier is an orchestrator step on a fresh copy of the branch; an escaped High turns tier 2 auto-merge off; `ops/revert` and `ops/release` cover the way back and the way out.
 
 ### 7.2 The gate (`checks.py`). Every check returns evidence, never an opinion.
 | Check | Fails when |

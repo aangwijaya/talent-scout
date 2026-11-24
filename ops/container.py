@@ -299,11 +299,34 @@ def ensure_clone(wt):
     clone = clone_path(wt)
     if (clone / ".git").is_dir():
         return clone
+    return _clone(wt, clone)
+
+
+def verify_clone(wt, repo, cfg):
+    """A fresh copy of the node branch for the verifier, who sabotages tests in it. Nothing in it comes back:
+    it is made anew for every verification and removed with the node."""
+    clone = CLONES / f"{Path(wt).name}-verify"
+    shutil.rmtree(clone, ignore_errors=True)
+    _clone(wt, clone)
+    env = Path(wt) / ".env"
+    if env.exists():  # the client build reads its non-production values from .env, like the worker's clone
+        (clone / ".env").write_bytes(env.read_bytes())
+        (clone / ".env").chmod(0o600)
+    if repo == "client":
+        done = run_code("pnpm install --frozen-lockfile", str(clone), repo, cfg, timeout=600)
+        if done.returncode:
+            raise SandboxError(f"pnpm install for the verifier: {done.stderr.strip()[-300:]}")
+    return clone
+
+
+def _clone(wt, clone):
     branch = _git(wt, "branch", "--show-current")
     source = Path(git_common_dir(wt)).parent
     CLONES.mkdir(parents=True, exist_ok=True)
     _git(CLONES, "clone", "-q", "--no-hardlinks", "--no-checkout", str(source), str(clone))
-    _git(clone, "fetch", "-q", str(source), "+refs/remotes/origin/main:refs/remotes/origin/main")
+    import lib
+    for ref in dict.fromkeys(["main", lib.integration(lib.config())]):
+        _git(clone, "fetch", "-q", str(source), f"+refs/remotes/origin/{ref}:refs/remotes/origin/{ref}")
     _git(clone, "checkout", "-q", "-B", branch, f"refs/remotes/origin/{branch}")
     return clone
 

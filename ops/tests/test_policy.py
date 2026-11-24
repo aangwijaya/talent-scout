@@ -34,7 +34,7 @@ HOST = re.compile(r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2
 
 # Safe ranges for the sandbox and run limits.
 LIMITS = {"sandbox_cpus": (1, 8), "sandbox_pids": (64, 4096), "budget_usd": (1, 10),
-          "timeout_min": (10, 120), "review_timeout_min": (5, 60), "idle_min": (2, 30),
+          "timeout_min": (10, 120), "review_timeout_min": (5, 60), "verify_timeout_min": (10, 60), "idle_min": (2, 30),
           "max_attempts": (1, 5), "ci_wait_min": (5, 60), "daily_budget_usd": (1, 50),
           "quota_pause_min": (15, 24 * 60), "poll_sec": (30, 600)}
 MAX_MEMORY = 8 * 1024 ** 3
@@ -78,6 +78,22 @@ class BudgetPolicy(unittest.TestCase):
     def test_the_budget_day_is_a_real_time_zone(self):
         from zoneinfo import ZoneInfo
         ZoneInfo(self.cfg["budget_tz"])
+
+
+class MergePolicy(unittest.TestCase):
+    cfg = lib.config()
+
+    def test_nothing_merges_by_itself_into_the_release_branch(self):
+        import merge_policy
+        self.assertEqual(merge_policy.tiers({**self.cfg, "integration_branch": "main"}), [])
+
+    def test_tier3_never_merges_by_itself_even_if_listed(self):
+        import merge_policy
+        self.assertNotIn(3, merge_policy.tiers({**self.cfg, "integration_branch": "dev", "automerge": ["1", "2", "3"]}))
+
+    def test_the_integration_branch_is_a_plain_branch_name(self):
+        self.assertRegex(self.cfg["integration_branch"], r"^[a-z][a-z0-9-]*$")
+        self.assertIn(self.cfg["verifier_agent"], ("claude", "opencode"))
 
 
 class DispatchPolicy(unittest.TestCase):

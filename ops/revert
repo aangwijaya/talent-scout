@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Take a bad node back out of the integration branch (ADR 0008).
+
+ops/revert client#15 [--dry-run]
+
+Opens a revert PR of the node's merge into the integration branch, for the human to merge (a revert is
+reviewed like the node: same tier, never merged by itself). It reopens the node's issue, and comments on
+every node merged after it, because they were built on top of it and need a second look. `main` is untouched
+until the next release.
+"""
+import json
+import sys
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import ledger
+from lib import REPOS, ROOT, base_ref, config, gh, gh_env, integration, push_argv, sh
+
+
+def merged_prs(repo, cfg):
+    return json.loads(gh("pr", "list", "-R", REPOS[repo], "--state", "merged", "--base", integration(cfg),
+                         "--limit", "200", "--json", "number,title,headRefName,mergeCommit,mergedAt,body") or "[]")
+
+
+def node_pr(prs, number):
+    found = [p for p in prs if p["headRefName"].startswith(f"node/{number}-")]
+    if not found:
+        raise SystemExit(f"no merged node PR for #{number} into this branch")
+    return max(found, key=lambda p: p["mergedAt"])
+
+
+def later_nodes(prs, pr):
+    """Node issues whose PR merged after this one: they may build on what is being taken out."""
+    out = []
+    for other in prs:
+        if other["mergedAt"] > pr["mergedAt"] and other["headRefName"].startswith("node/"):
+            out.append(int(other["headRefName"].split("/")[1].split("-")[0]))
+    return sorted(set(out))
+
+
+def tier_of_node(node_id):
+    tiers = [r.get("tier") for _, _, r in ledger.records() if r.get("node") == node_id and r.get("tier")]
+    return tiers[-1] if tiers else None
+
+
+def main(argv):
+    if len(argv) < 2 or "#" not in argv[1]:
+        raise SystemExit("usage: ops/revert client#15 [--dry-run]")
+    repo, _, number = argv[1].partition("#")
+    number = int(number)
+    cfg = config()
+    prs = merged_prs(repo, cfg)
+    pr = node_pr(prs, number)
+    later = later_nodes(prs, pr)
+    tier = tier_of_node(argv[1])
+    plan = (f"revert PR #{pr['number']} ({pr['title']}), merge commit {pr['mergeCommit']['oid'][:8]}, "
+            f"into {integration(cfg)}; tier {tier or '?'}; re-check {', '.join(f'#{n}' for n in later) or 'nothing'}")
+    if "--dry-run" in argv:
+        return print(plan)
+    checkout = ROOT / f"talent-scout-{repo}"
+    branch = f"revert/{number}"
+    wt = ROOT / "wt" / f"{repo}-revert-{number}"
+    sh(["git", "fetch", "-q", "origin"], cwd=checkout)
+    sh(["git", "worktree", "add", "-q", str(wt), "-b", branch, "--no-track", base_ref(cfg)], cwd=checkout)
+    try:
+        sh(["git", "revert", "--no-edit", "-m", "1", pr["mergeCommit"]["oid"]], cwd=wt)
+        sh(push_argv(REPOS[repo], branch, cfg), cwd=wt, env=gh_env(cfg))
+        url = gh("pr", "create", "-R", REPOS[repo], "--base", integration(cfg), "--head", branch,
+                 "--title", f"Revert {argv[1]}: {pr['title']}",
+                 "--body", f"Reverts #{pr['number']} (node #{number}), tier {tier or '?'}. The human merges a revert; "
+                           f"it never merges by itself.\n\n{ledger.anchor()}").strip()
+    finally:
+        sh(["git", "worktree", "remove", "--force", str(wt)], cwd=checkout, check=False)
+    gh("issue", "reopen", str(number), "-R", REPOS[repo])
+    gh("issue", "comment", str(number), "-R", REPOS[repo],
+       "--body", f"{ledger.anchor()}\n↩️ Taken back out of `{integration(cfg)}`: {url}. Fix it in a new attempt.")
+    for other in later:
+        gh("issue", "comment", str(other), "-R", REPOS[repo],
+           "--body", f"{ledger.anchor()}\n🔎 Re-check: #{number} merged before this node and is being reverted ({url}).")
+    ledger.append("reverted", actor="human", node=argv[1], pr=pr["number"], revert_pr=url, tier=tier,
+                  recheck=[f"{repo}#{n}" for n in later] or None)
+    print(f"{plan}\nopened {url}")
+
+
+if __name__ == "__main__":
+    main(sys.argv)
