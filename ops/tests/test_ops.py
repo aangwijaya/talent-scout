@@ -565,7 +565,7 @@ class ContractSync(unittest.TestCase):
         sync = load_script("contract-sync")
         calls = []
 
-        def fake_sh(cmd, cwd=None, check=True):
+        def fake_sh(cmd, cwd=None, check=True, env=None):
             calls.append(cmd)
             out = "abcdef1234567890\n" if cmd[:2] == ["git", "rev-parse"] else ""
             if cmd[:2] == ["git", "show"] and cmd[2].endswith("contract.lock"):
@@ -595,7 +595,7 @@ class ContractSync(unittest.TestCase):
         sync = load_script("contract-sync")
         calls = []
         with tempfile.TemporaryDirectory() as tmp:
-            def fake_sh(cmd, cwd=None, check=True):
+            def fake_sh(cmd, cwd=None, check=True, env=None):
                 calls.append(cmd)
                 if cmd[:3] == ["git", "worktree", "add"]:
                     for path in sync.FILES.values():

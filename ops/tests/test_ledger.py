@@ -217,7 +217,7 @@ class RunRecords(LedgerCase):
             return 0, ""
         run.run_agent = agent
         run.gate = lambda node, wt, cfg, text: {"failures": [], "tier": 2}
-        run.sh = lambda cmd, cwd=None, check=True: subprocess.CompletedProcess(
+        run.sh = lambda cmd, cwd=None, check=True, env=None: subprocess.CompletedProcess(
             cmd, 1 if cmd[:3] == ["gh", "pr", "view"] else 0, "node/1-x\n", "")
         run.wait_ci = lambda node, branch, cfg: []
         run.independent_review = lambda node, wt, cfg: [{"severity": "Low", "file": "a", "summary": "b"}]

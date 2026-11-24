@@ -68,6 +68,22 @@ class TierPolicy(unittest.TestCase):
         self.assertTrue(256 * 1024 ** 2 <= memory <= MAX_MEMORY, f"sandbox_memory={self.cfg['sandbox_memory']}")
 
 
+class IdentityPolicy(unittest.TestCase):
+    cfg = lib.config()
+
+    def test_identity_and_secret_store_are_known_values(self):
+        self.assertIn(self.cfg.get("github_identity"), ("legacy", "apps"))
+        self.assertIn(self.cfg.get("secret_store"), ("files", "creds"))
+
+    def test_apps_mode_names_both_apps_and_keeps_their_keys_encrypted(self):
+        if self.cfg.get("github_identity") != "apps":
+            self.skipTest("still on the legacy identity")
+        for role in ("agent", "orchestrator"):
+            self.assertIsInstance(self.cfg.get(f"{role}_app_id"), int)
+            self.assertGreater(self.cfg[f"{role}_app_id"], 0, role)
+        self.assertEqual(self.cfg["secret_store"], "creds", "App private keys never sit in plain files")
+
+
 class EgressPolicy(unittest.TestCase):
     hosts = [line.split("#", 1)[0].strip() for line in container.ALLOWLIST.read_text().splitlines()]
     hosts = [h for h in hosts if h]

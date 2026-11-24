@@ -333,6 +333,11 @@ def agent_home():
 
 
 def claude_token():
+    import creds
+    from lib import config
+    cfg = config()
+    if creds.mode(cfg) == "creds":
+        return creds.read("claude-oauth-token", cfg).strip()
     if not CLAUDE_TOKEN.exists():
         raise SandboxError(f"no Claude token at {CLAUDE_TOKEN}; create it with `claude setup-token` (WORKFLOW.md)")
     return CLAUDE_TOKEN.read_text().strip()

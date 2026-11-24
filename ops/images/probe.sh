@@ -6,7 +6,8 @@ host_home=$1 root=$2 mem=$3 pids=$4 allowed=$5
 report() { echo "$1 $2: $3"; }
 
 for path in "$host_home/.ssh" "$host_home/.config/gh" "$host_home/.claude" "$host_home/.claude.json" \
-            "$host_home/.local/share/opencode" "$root/ops/env" "$host_home/.gitconfig"; do
+            "$host_home/.local/share/opencode" "$root/ops/env" "$host_home/.gitconfig" \
+            "$host_home/.config/talent-scout-ops" "$host_home/.local/state/talent-scout-ops"; do
   if [ -e "$path" ]; then report FAIL hidden-files "$path is visible"; else report PASS hidden-files "$path"; fi
 done
 

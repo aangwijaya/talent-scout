@@ -5,7 +5,7 @@ import json
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from lib import REPOS, ROOT, gh, sh
+from lib import REPOS, ROOT, gh, gh_env, push_argv, sh
 
 FILES = {"docs/API.md": "docs/API.md", "docs/EVENTS.md": "docs/EVENTS.md", "docs/PRD.md": "docs/PRD.md",
          "api/openapi.yaml": "src/lib/server/api/openapi.yaml"}
@@ -50,7 +50,7 @@ def main():
     sh(["pnpm", "gen:api"], cwd=wt)
     sh(["git", "add", "-A"], cwd=wt)
     sh(["git", "commit", "-qm", f"chore: pin contract to server {head[:8]}"], cwd=wt)
-    sh(["git", "push", "-q", "-u", "origin", "HEAD"], cwd=wt)
+    sh(push_argv(REPOS["client"], branch), cwd=wt, env=gh_env())
     gh("pr", "create", "-R", REPOS["client"], "--head", branch, "--title", f"chore: pin contract to server {head[:8]}",
        "--body", f"Byte-identical copy of the contract at {REPOS['server']}@{head}. Approval happened on the server.")
     sh(["git", "worktree", "remove", "--force", str(wt)], cwd=CLIENT)

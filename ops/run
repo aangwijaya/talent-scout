@@ -24,11 +24,13 @@ import importlib.machinery
 import importlib.util
 
 import container
+import creds
+import identity
 import ledger
 from checks import feedback, gate, saw_key
 from lib import (AGENT_LOGIN_KEEP, AGENTS, HANDOFF_DIR, HANDOFF_MARK, OPS, PROXY_ENV_KEEP, REPOS, ROOT, STATE,
-                 STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, config, gh, handoff_path, load_nodes,
-                 load_state, parse_handoff, save_state, sh, state_path, with_egress)
+                 STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, config, gh, gh_env, handoff_path, load_nodes,
+                 load_state, parse_handoff, push_argv, save_state, sh, state_path, with_egress)
 
 _loader = importlib.machinery.SourceFileLoader("brief", str(OPS / "brief"))
 _spec = importlib.util.spec_from_loader("brief", _loader)
@@ -45,8 +47,9 @@ CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm:*)", "Bash(g
                 "Bash(git log:*)", "Bash(git show:*)", "Bash(gh issue view:*)", "Bash(gh issue list:*)",
                 "Bash(gh issue create:*)", "Bash(gh issue comment:*)", "Bash(rg:*)", "Bash(ls:*)"]
 
-# The agent's own GitHub identity: a fine-grained token with Issues read/write and Metadata read only.
-# It cannot push, open PRs or merge; ops/run does those with the human's gh. See WORKFLOW.md.
+# The agent's own GitHub identity, with Issues read/write and Metadata read only: the ts-agent App's
+# installation token (github_identity: apps, ADR 0006), or before that a fine-grained token in this file.
+# It cannot push, open PRs or merge; ops/run does those. See WORKFLOW.md.
 AGENT_GH_TOKEN = OPS / "env" / "agent.gh-token"
 # Agents run code they write (go test, pnpm scripts), so every variable passed here reaches that
 # code too. The lists live in lib.py, shared with the gate's checks; agents add only their CLI login.
@@ -67,14 +70,25 @@ class Stop(Exception):
     pass
 
 
-def agent_env(wt, gh_config_dir):
-    """The whole environment an agent gets. gh_config_dir is an empty dir, so gh has no login to fall back to."""
+def agent_token(repo, cfg):
+    """The agent's GitHub token for one repo."""
+    if identity.mode(cfg) == "apps":
+        try:
+            return identity.token("agent", [REPOS[repo]], cfg)
+        except (identity.IdentityError, creds.SecretMissing) as err:
+            raise Stop(f"no agent token: {err}")
     try:
-        token = AGENT_GH_TOKEN.read_text().strip()
-    except FileNotFoundError:
+        token = (creds.read("agent-gh-token", cfg) if creds.mode(cfg) == "creds" else AGENT_GH_TOKEN.read_text()).strip()
+    except (FileNotFoundError, creds.SecretMissing):
         raise Stop(f"no agent GitHub token at {AGENT_GH_TOKEN}; see 'Agent GitHub token' in WORKFLOW.md")
     if not token.startswith("github_pat_"):
         raise Stop(f"{AGENT_GH_TOKEN} must hold a fine-grained token (github_pat_...), not a classic or gh login token")
+    return token
+
+
+def agent_env(wt, gh_config_dir, repo=None):
+    """The whole environment an agent gets. gh_config_dir is an empty dir, so gh has no login to fall back to."""
+    token = agent_token(repo or Path(wt).name.split("-")[0], config())
     env = {k: os.environ[k] for k in AGENT_ENV_KEEP if k in os.environ}
     env.update(PWD=str(wt), GH_TOKEN=token, GH_CONFIG_DIR=str(gh_config_dir), GH_PROMPT_DISABLED="1",
                GIT_TERMINAL_PROMPT="0", GIT_CONFIG_COUNT=str(len(AGENT_GIT_CONFIG)))
@@ -242,8 +256,12 @@ def prepare(node):
             # The checks run in the worktree and the agent works in its clone: both need it, and both
             # get their dependencies installed in the sandbox.
             agent_env = OPS / "env" / "client.env.agent"
+            encrypted = creds.mode(cfg) == "creds" and creds.path("client-env-agent").exists()
             for target in (wt, container.clone_path(wt)):
-                if agent_env.exists():
+                if encrypted:
+                    (target / ".env").touch(mode=0o600)
+                    (target / ".env").write_text(creds.read("client-env-agent", cfg))
+                elif agent_env.exists():
                     shutil.copy2(agent_env, target / ".env")
                 done = container.run_code("pnpm install --frozen-lockfile", str(target), "client", cfg, timeout=600)
                 if done.returncode:
@@ -307,7 +325,7 @@ def wait_ci(node, branch, cfg):
     while time.time() < deadline:
         if STOP_FILE.exists():
             raise Stop("stop requested")
-        raw = sh(["gh", "pr", "checks", branch, "-R", full, "--json", "name,bucket"], check=False).stdout
+        raw = sh(["gh", "pr", "checks", branch, "-R", full, "--json", "name,bucket"], check=False, env=gh_env()).stdout
         checks = json.loads(raw or "[]")
         if checks and all(c["bucket"] != "pending" for c in checks):
             bad = [c["name"] for c in checks if c["bucket"] == "fail"]
@@ -410,8 +428,9 @@ def process(node, cfg):
         if not failures:
             confirm(f"{node.id}: gate passed (tier {result['tier']}). Push and open a PR")
             branch = sh(["git", "branch", "--show-current"], cwd=wt).stdout.strip()
-            sh(["git", "push", "-q", "-u", "origin", "HEAD"], cwd=wt)
-            existing = sh(["gh", "pr", "view", branch, "-R", REPOS[node.repo], "--json", "number"], check=False)
+            sh(push_argv(REPOS[node.repo], branch, cfg), cwd=wt, env=gh_env(cfg))
+            existing = sh(["gh", "pr", "view", branch, "-R", REPOS[node.repo], "--json", "number"], check=False,
+                          env=gh_env(cfg))
             if existing.returncode:
                 credit = "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)" if node.agent == "claude" else ""
                 audit("pr.opened", node, branch=branch, tier=result["tier"])
@@ -501,7 +520,7 @@ def check_agent_auth():
     with tempfile.TemporaryDirectory() as tmp:
         for repo in REPOS:
             checkout = ROOT / f"talent-scout-{repo}"
-            env = agent_env(checkout, tmp)
+            env = agent_env(checkout, tmp, repo)
             issues = subprocess.run(["gh", "issue", "list", "--limit", "1", "--json", "number"], cwd=checkout,
                                     env=env, capture_output=True, text=True)
             # --dry-run never writes; GitHub answers the receive-pack request with 403 before any ref moves.
