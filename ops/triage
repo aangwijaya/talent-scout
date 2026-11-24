@@ -8,7 +8,7 @@ import re
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from lib import REPOS, ROOT, analyze, egress_refusals, gh, last_handoff, load_nodes, parse_handoff, sh
+from lib import REPOS, ROOT, analyze, base_ref, config, egress_refusals, gh, last_handoff, load_nodes, parse_handoff, sh
 
 
 def repeated_lessons(text):
@@ -45,7 +45,7 @@ def main():
             print(f"  {key}: {', '.join(hosts)}")
     print(f"READY {len(graph['ready'])}, ACTIVE {len(graph['active'])}, WAITING {len(graph['waiting'])}")
     for repo, full in REPOS.items():
-        lessons = sh(["git", "show", "origin/main:docs/LESSONS.md"], cwd=ROOT / f"talent-scout-{repo}", check=False).stdout
+        lessons = sh(["git", "show", f"{base_ref(config())}:docs/LESSONS.md"], cwd=ROOT / f"talent-scout-{repo}", check=False).stdout
         repeats = repeated_lessons(lessons)
         if not repeats:
             continue

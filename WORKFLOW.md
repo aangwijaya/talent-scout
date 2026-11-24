@@ -23,6 +23,9 @@ ops/report                   # per-node results from the audit ledger, and the t
 ops/report --verify          # check the ledger chain and every head published on GitHub
 ops/report --note client#12 intervention "fixed the lint by hand" --by lead
                              # record what a person did (intervention or escaped-high)
+ops/report --automerge on    # turn tier 2 auto-merge back on after an escaped High
+ops/revert client#15         # take a bad node back out of dev (--dry-run first)
+ops/release server           # check and draft a release of dev into main (--open to open the PR)
 ```
 
 ## The node
@@ -157,13 +160,58 @@ Like the planning skills, they need a human, so a headless agent must never load
 
 `ops/report` turns all this into one row per node, plus the tier 1 auto-merge targets below.
 
-## Pilot targets before enabling tier 2 auto-merge
+## Integration branch and releases
 
-- Under 1 human intervention per tier 1–2 issue on average
-- No merge with failing CI, and no High finding that escaped
-- Most gaps found at SCOPE, not mid-implementation
+Nodes start from and merge into the integration branch, `dev`, the default branch of both app repos (ADR 0008). Production (Railway, Vercel) deploys from `main`, which changes only through a release PR you merge.
 
-Tier 1 auto-merge needs the last 10 merged tier 1 nodes in the ledger to meet the first two lines. `ops/report` shows where they stand.
+**What merges by itself into `dev`.** A tier 1 or 2 node, when all of these hold:
+- CI is green;
+- the independent review found no High;
+- the verifier says `merge`.
+
+The verifier runs after the review in a fresh copy of the branch inside the sandbox, so its sabotage never reaches your worktree. It posts its verdict on the PR, and `verify` goes into the ledger. Everything else waits for you with the reason in the handoff:
+- tier 3;
+- a verdict other than `merge`;
+- no verdict;
+- tier 2 while auto-merge is off.
+
+A High the verifier confirms goes back to the agent like a review High.
+
+**Escaped High.** A High the review missed, found by the verifier or by you (`ops/report --note NODE escaped-high "…"`), turns tier 2 auto-merge off. `ops/report` shows it, and `ops/report --automerge on` turns it back on.
+
+**A bad node in `dev`.** Run `ops/revert client#15 --dry-run` to see the plan, then `ops/revert client#15`. It does three things:
+- opens a revert PR into `dev` for you to merge;
+- reopens the issue;
+- comments "re-check" on every node merged after it.
+
+**Releasing.** Do it per feature, or after about 5 nodes, and the server first.
+1. `ops/release server` checks the conditions and prints the body. Each node gets one row: tier, review, verdict, who merged it and its cost. A checklist adds a live gate when prompts or models changed, the production migrations, and a smoke test.
+2. The lead agent writes a short summary. `ops/release server --open --summary FILE` opens the release PR `dev` → `main`.
+3. You merge it, run any migration in production, and smoke test.
+4. Then the client: `ops/release client` refuses until the server commit pinned by its `contract.lock` is in the server's `main`.
+
+### One-time setup (human)
+
+1. Check that production deploys from `main` by name, so the switch can't move it: Vercel → Project → Settings → Git → Production Branch is `main`, and Railway → service → Settings → Source → Branch is `main`.
+2. In each app repo, create `dev` from `main`, and make it the default branch:
+   ```bash
+   gh api repos/aangwijaya/talent-scout-server/git/refs -f ref=refs/heads/dev -f sha=$(gh api repos/aangwijaya/talent-scout-server/git/ref/heads/main --jq .object.sha)
+   gh repo edit aangwijaya/talent-scout-server --default-branch dev
+   ```
+   Do the same for `talent-scout-client`.
+3. Rulesets in each app repo (Settings → Rules):
+   - **`prod`:** target `main` **by name, not "Default branch"**, or it moves to `dev` with the default. It requires a PR with 1 approval, the required checks, and blocks force pushes and deletion. Your bypass is for pull requests only.
+   - **`integration`:** target `dev`. It requires the same status checks, and blocks force pushes and deletion. No approval rule, so `ts-orchestrator` can merge tier 1–2.
+4. Set `integration_branch: dev` in `ops/tiers.yaml` (a PR here). Until then nothing merges by itself.
+
+## Measured targets
+
+`ops/report` tracks, per node:
+- human interventions (target: under 1 per tier 1–2 node on average);
+- merges with failing CI and escaped Highs (target: none);
+- gaps found at SCOPE rather than mid-implementation.
+
+The last 10 merged tier 1 nodes meeting the first two is the bar for any later step toward releasing to `main` by itself.
 
 ## The service and dispatch
 

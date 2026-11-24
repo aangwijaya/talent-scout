@@ -24,6 +24,17 @@ GREEN = {
 HANDOFF_FIELDS = ["STATUS", "GOAL", "TRIED", "KNOWN", "NEXT", "NEVER"]
 HANDOFF_MARK = "<!-- handoff -->"
 CONTRACT_FILES = ["docs/API.md", "docs/EVENTS.md", "docs/PRD.md"]
+RELEASE_BRANCH = "main"  # production deploys from it; only a release PR the human merges changes it (ADR 0008)
+
+
+def integration(cfg):
+    """The branch nodes start from and merge into (GLOSSARY: integration branch): `dev` once the app repos
+    have it, `main` until then."""
+    return cfg.get("integration_branch", RELEASE_BRANCH)
+
+
+def base_ref(cfg):
+    return f"origin/{integration(cfg)}"
 
 
 # Code from a worktree (agents, green and red checks, dependency installs) only ever sees these

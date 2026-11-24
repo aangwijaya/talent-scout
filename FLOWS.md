@@ -203,6 +203,25 @@ flowchart LR
 
 ---
 
+## H. Branch `dev` dan rilis
+
+Node masuk ke `dev`, dan production hanya berubah lewat rilis yang saya merge (ADR 0008).
+
+```mermaid
+flowchart LR
+  N[PR node] --> CI[CI hijau] --> R[Review: tanpa High] --> V[Verifier otomatis: sabotase test]
+  V -->|merge, tier 1-2| D[(dev)]
+  V -->|tier 3 atau verdict lain| H[Saya merge ke dev]
+  H --> D
+  D --> RL[Release PR: ringkasan per node dari ledger]
+  RL -->|saya merge, server dulu| M[(main = production)]
+```
+
+- **High yang lolos dari review** mematikan auto-merge tier 2 sampai saya nyalakan lagi.
+- **Node buruk** dikeluarkan dengan `ops/revert`, dan node setelahnya ditandai untuk dicek ulang.
+
+---
+
 ## Lampiran 1. Alur aplikasi
 
 Tiga jalur: pelamar, graph AI, lalu recruiter. AI hanya membantu; keputusan selalu di tangan manusia.

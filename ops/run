@@ -29,10 +29,11 @@ import creds
 import dispatch
 import identity
 import ledger
+import merge_policy
 from checks import feedback, gate, saw_key
 from lib import (AGENT_LOGIN_KEEP, AGENTS, HANDOFF_DIR, HANDOFF_MARK, HOLD_FILE, OPS, PROXY_ENV_KEEP, REPOS, ROOT, STATE,
                  STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, config, gh, gh_env, handoff_path, load_nodes,
-                 load_state, parse_handoff, push_argv, save_state, sh, state_path, with_egress)
+                 load_state, parse_handoff, push_argv, save_state, sh, state_path, with_egress, base_ref, integration)
 
 _loader = importlib.machinery.SourceFileLoader("brief", str(OPS / "brief"))
 _spec = importlib.util.spec_from_loader("brief", _loader)
@@ -43,12 +44,16 @@ AUTO = "--auto" in sys.argv
 LAST_AGENT_ERROR = None  # the API error that ended the last agent run, if any
 LAST_EGRESS_REFUSED = []  # hosts the sandbox's proxy refused during the last agent run
 REVIEW_UNAVAILABLE = None  # why the last independent review returned no findings
+VERIFY_UNAVAILABLE = None  # why the last verification returned no verdict
 LAST_COST = None  # what the last agent run spent, in USD, as the agent reported it
 LAST_COST_ESTIMATED = False  # True when a stopped Claude run is counted at its whole allowance (it reports only at the end)
 CLAUDE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm:*)", "Bash(go:*)", "Bash(gofmt:*)",
                 "Bash(git add:*)", "Bash(git commit:*)", "Bash(git status:*)", "Bash(git diff:*)",
                 "Bash(git log:*)", "Bash(git show:*)", "Bash(gh issue view:*)", "Bash(gh issue list:*)",
                 "Bash(gh issue create:*)", "Bash(gh issue comment:*)", "Bash(rg:*)", "Bash(ls:*)"]
+# The verifier edits files to sabotage tests and undoes them with git checkout; it never commits or files issues.
+VERIFIER_TOOLS = [t for t in CLAUDE_TOOLS if not t.startswith(("Bash(git add", "Bash(git commit", "Bash(gh issue create",
+                                                              "Bash(gh issue comment"))] + ["Bash(git checkout:*)"]
 
 # The agent's own GitHub identity, with Issues read/write and Metadata read only: the ts-agent App's
 # installation token (github_identity: apps, ADR 0006), or before that a fine-grained token in this file.
@@ -169,7 +174,7 @@ def claude_result(text, code):
     return reply, result.get("total_cost_usd"), error
 
 
-def run_agent(agent, prompt, wt, cfg, read_only=False):
+def run_agent(agent, prompt, wt, cfg, read_only=False, verify=False):
     global LAST_AGENT_ERROR, LAST_EGRESS_REFUSED, LAST_COST, LAST_COST_ESTIMATED
     LAST_AGENT_ERROR, LAST_EGRESS_REFUSED, LAST_COST, LAST_COST_ESTIMATED = None, [], None, False
     HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
@@ -177,9 +182,11 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     repo = Path(wt).name.split("-")[0]
     container.require_image(repo)  # fail closed before anything starts
     container.ensure_egress(cfg)
-    work = container.ensure_clone(wt)  # the agent works in its own clone, never the human's worktree
+    # The agent works in its own clone, never the human's worktree. The verifier gets a fresh copy it may
+    # break while it sabotages tests; nothing in it comes back.
+    work = container.verify_clone(wt, repo, cfg) if verify else container.ensure_clone(wt)
     if agent == "claude":
-        tools = ["Read", "Glob", "Grep"] if read_only else CLAUDE_TOOLS
+        tools = ["Read", "Glob", "Grep"] if read_only else VERIFIER_TOOLS if verify else CLAUDE_TOOLS
         dirs = [str(HANDOFF_DIR)] + ([go_mod_cache()] if repo == "server" else [])
         cmd = ["claude", "-p", "--model", cfg["claude_model"], "--effort", cfg["claude_effort"],
                "--max-budget-usd", str(cfg["budget_usd"]), "--no-session-persistence", "--output-format", "json",
@@ -268,7 +275,7 @@ def run_agent(agent, prompt, wt, cfg, read_only=False):
     refused = LAST_EGRESS_REFUSED = container.save_egress_log(Path(wt).name, started)
     if refused:
         print(f"  egress refused for {Path(wt).name}: {', '.join(refused)} (ops/.state/egress/)", flush=True)
-    if not read_only:
+    if not read_only and not verify:
         # The gate, the push and the review read the human's worktree; the agent's commits come
         # back as a bundle with hooks off. Uncommitted changes in the clone stay there.
         container.import_agent_commits(work, wt, repo, cfg)
@@ -282,10 +289,10 @@ def prepare(node):
     checkout = ROOT / f"talent-scout-{node.repo}"
     sh(["git", "fetch", "-q", "origin"], cwd=checkout)
     if not wt.exists():
+        cfg = config()
         slug = re.sub(r"[^a-z0-9]+", "-", node.title.lower())[:30].strip("-")
         sh(["git", "worktree", "add", "-q", str(wt), "-b", f"node/{node.number}-{slug}",
-            "--no-track", "origin/main"], cwd=checkout)
-        cfg = config()
+            "--no-track", base_ref(cfg)], cwd=checkout)
         container.ensure_clone(wt)
         if node.repo == "client":
             # The client build reads its local, non-production values from .env. Nothing the server agent
@@ -404,7 +411,7 @@ def independent_review(node, wt, cfg):
     Returns None when no findings came back; REVIEW_UNAVAILABLE then says why, and the PR says so too."""
     global REVIEW_UNAVAILABLE
     REVIEW_UNAVAILABLE = None
-    diff = sh(["git", "diff", "origin/main...HEAD"], cwd=wt).stdout
+    diff = sh(["git", "diff", f"{base_ref(cfg)}...HEAD"], cwd=wt).stdout
     prompt = f"{(OPS / 'prompts/review.md').read_text()}\n\n## Issue\n{node.body}\n\n## Diff\n{diff}"
     reviewer = "claude" if AGENTS[node.repo] == "opencode" else "opencode"
     branch = sh(["git", "branch", "--show-current"], cwd=wt).stdout.strip()
@@ -437,6 +444,86 @@ def independent_review(node, wt, cfg):
     gh("pr", "comment", branch, "-R", REPOS[node.repo],
        "--body", f"Independent review ({reviewer})\n\n" + ("\n".join(lines) or "No findings."))
     return findings
+
+
+def weigh_verdict(node, report, findings, tier):
+    """Turn the verifier's report into gate failures (a confirmed High goes back to the agent) and a note for
+    the human. A High the review missed is an escaped High: it is recorded and turns tier 2 auto-merge off."""
+    if report is None:
+        audit("verify", node, available=False, reason=(VERIFY_UNAVAILABLE or "")[:300])
+        return [], f" Verifier unavailable ({VERIFY_UNAVAILABLE})."
+    high = report.get("high") or []
+    escaped = [h for h in high if not h.get("review_had_it")] if findings is not None and tier >= 2 else []
+    audit("verify", node, available=True, verdict=report["verdict"], high=len(high), escaped=len(escaped),
+          gaps=len(report.get("gaps") or []))
+    for h in escaped:
+        ledger.append("note", actor="verifier", node=node.id, kind="escaped-high",
+                      text=f"{h.get('file')}: {h.get('summary')}"[:500])
+        merge_policy.escaped_high(node.id, f"{h.get('file')}: {h.get('summary')}", by="verifier")
+    failures = [{"check": "verify", "expected": "no High findings", "saw": f"{h.get('file')}: {h.get('summary')}"}
+                for h in high]
+    return failures, f" Verifier: {report['verdict']}. {report.get('summary', '')}".rstrip()
+
+
+def parse_verdict(text):
+    """The verifier's last {"verdict": ...} object, fenced or bare."""
+    decoder, found = json.JSONDecoder(), None
+    for match in re.finditer(r'\{\s*"verdict"', text or ""):
+        try:
+            value = decoder.raw_decode(text, match.start())[0]
+        except ValueError:
+            continue
+        if value.get("verdict") in ("merge", "fix-small", "rework", "blocked"):
+            found = value
+    return found
+
+
+def verify(node, wt, cfg, findings):
+    """The verifier as an orchestrator step (ADR 0008): a fresh session in the sandbox checks the PR against the
+    issue, weighs the review's findings and sabotages the tests. Returns its report, or None (VERIFY_UNAVAILABLE
+    says why). Its verdict goes on the PR as a comment."""
+    global VERIFY_UNAVAILABLE
+    VERIFY_UNAVAILABLE = None
+    diff = sh(["git", "diff", f"{base_ref(cfg)}...HEAD"], cwd=wt).stdout
+    if findings is None:
+        listed = "(no independent review for tier 1)"
+    else:
+        listed = "\n".join(f"- {f.get('severity')} {f.get('file')}: {f.get('summary')}" for f in findings) or "(none)"
+    prompt = (f"{(OPS / 'prompts/verify.md').read_text()}\n\n## Issue\n{node.body}\n\n## Review findings\n{listed}"
+              f"\n\n## Diff\n{diff}")
+    agent = cfg.get("verifier_agent", "claude")
+    branch = sh(["git", "branch", "--show-current"], cwd=wt).stdout.strip()
+    verify_cfg = {**cfg, "timeout_min": cfg.get("verify_timeout_min", cfg["timeout_min"])}
+    text = ""
+    try:
+        verify_cfg["budget_usd"] = budget.allowance(cfg)
+        try:
+            _, text = run_agent(agent, prompt, wt, verify_cfg, verify=True)
+        finally:
+            audit("verify.run", node, agent=agent, cost_usd=LAST_COST,
+                  cost_estimated=LAST_COST_ESTIMATED or None, error=LAST_AGENT_ERROR)
+    except budget.BudgetSpent as spent:
+        VERIFY_UNAVAILABLE = str(spent)
+    except QuotaHit as hit:
+        until = budget.pause_for_quota(agent, str(hit), cfg)
+        VERIFY_UNAVAILABLE = f"{hit}; {agent} is paused until {until:%Y-%m-%d %H:%M %Z}"
+    except (Stop, container.SandboxError) as stop:
+        if STOP_FILE.exists():
+            raise
+        VERIFY_UNAVAILABLE = str(stop)
+    report = parse_verdict(text) if not VERIFY_UNAVAILABLE else None
+    if report is None:
+        VERIFY_UNAVAILABLE = VERIFY_UNAVAILABLE or LAST_AGENT_ERROR or "the reply had no verdict block"
+        gh("pr", "comment", branch, "-R", REPOS[node.repo],
+           "--body", f"Verifier unavailable ({agent}): {VERIFY_UNAVAILABLE}. The human verifies this PR.")
+        return None
+    highs = "\n".join(f"- **High** `{h.get('file')}`: {h.get('summary')}"
+                       f"{'' if h.get('review_had_it') else ' (the review missed it)'}" for h in report.get("high") or [])
+    gaps = "\n".join(f"- test gap: {g}" for g in report.get("gaps") or [])
+    gh("pr", "comment", branch, "-R", REPOS[node.repo],
+       "--body", f"Verifier ({agent}): **{report['verdict']}**\n\n{report.get('summary', '')}\n\n"
+                 f"Criteria: {report.get('criteria', '?')}\n{highs}\n{gaps}".strip())
+    return report
 
 
 def process(node, cfg):
@@ -496,11 +583,11 @@ def process(node, cfg):
         if status == "needs_human":
             post_handoff(node, text)
             return escalate(node, fields.get("NEXT", "decision needed"))
-        result = gate(node, wt, cfg, text)
+        result = gate(node, wt, cfg, text, base=base_ref(cfg))
         failures = result["failures"]
         audit("gate", node, attempt=state["attempts"], tier=result["tier"], passed=not failures,
               failed=sorted({f["check"] for f in failures}) or None)
-        review_note = ""
+        review_note, findings = "", None
         if not failures:
             confirm(f"{node.id}: gate passed (tier {result['tier']}). Push and open a PR")
             branch = sh(["git", "branch", "--show-current"], cwd=wt).stdout.strip()
@@ -510,7 +597,7 @@ def process(node, cfg):
             if existing.returncode:
                 credit = "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)" if node.agent == "claude" else ""
                 audit("pr.opened", node, branch=branch, tier=result["tier"])
-                gh("pr", "create", "-R", REPOS[node.repo], "--head", branch, "--title", node.title,
+                gh("pr", "create", "-R", REPOS[node.repo], "--base", integration(cfg), "--head", branch, "--title", node.title,
                    "--body", f"Closes #{node.number}\n\nTier {result['tier']}.\n\n{text}{credit}\n\n{ledger.anchor()}")
             set_status(node, "status:review")
             failures = wait_ci(node, branch, cfg)
@@ -524,16 +611,26 @@ def process(node, cfg):
             high = [f for f in findings if f.get("severity") == "High"]
             audit("review", node, available=REVIEW_UNAVAILABLE is None, findings=len(findings), high=len(high))
             failures = [{"check": "review", "expected": "no High findings", "saw": f"{f['file']}: {f['summary']}"} for f in high]
+        report = None
+        if not failures:
+            report = verify(node, wt, cfg, findings)
+            failures, verdict_note = weigh_verdict(node, report, findings, result["tier"])
+            review_note += verdict_note
         if not failures:
             post_handoff(node, text)
-            if result["tier"] in cfg["automerge"]:
+            why = merge_policy.why_not(result["tier"], cfg)
+            if why is None and report and report["verdict"] != "merge":
+                why = f"the verifier said {report['verdict']}"
+            if why is None and report is None:
+                why = "the verifier was unavailable"
+            if why is None:
                 gh("pr", "merge", branch, "-R", REPOS[node.repo], "--merge", "--delete-branch")
-                audit("merged", node, by="orchestrator", tier=result["tier"])
-                return print(f"{node.id}: merged")
+                audit("merged", node, by="orchestrator", tier=result["tier"], into=integration(cfg))
+                return print(f"{node.id}: merged into {integration(cfg)}")
             url = gh("pr", "view", branch, "-R", REPOS[node.repo], "--json", "url", "--jq", ".url").strip()
             reviewed = "green and reviewed" if result["tier"] >= 2 else "green (tier 1: no independent review)"
-            escalate(node, f"Tier {result['tier']} PR is {reviewed}.{review_note} Merge when you agree: {url}",
-                     event="ready")
+            escalate(node, f"Tier {result['tier']} PR is {reviewed}.{review_note} It waits for you: {why}. "
+                           f"Merge when you agree: {url}", event="ready")
             return print(f"\n>>> {node.id} is ready for you to merge: {url}\n{'   ' + review_note + chr(10) if review_note else ''}"
                          f"    After merging, ops/run --reconcile tidies labels and the worktree.\n")
         key = saw_key(failures)
@@ -565,13 +662,15 @@ def reconcile(nodes, repo=None):
         sh(["git", "fetch", "-q", "origin"], cwd=checkout)
         branch = sh(["git", "branch", "--show-current"], cwd=wt).stdout.strip()
         dirty = sh(["git", "status", "--porcelain"], cwd=wt).stdout.strip()
-        merged = not sh(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=wt, check=False).returncode
+        merged = not sh(["git", "merge-base", "--is-ancestor", "HEAD", base_ref(config())], cwd=wt,
+                        check=False).returncode
         if dirty or not merged:
             print(f"{node.id}: closed, but {wt} is {'dirty' if dirty else 'not merged'}; left in place")
             continue
         audit("merged", node, **pr_merge_info(node, branch))
         sh(["git", "worktree", "remove", str(wt)], cwd=checkout)
         shutil.rmtree(container.clone_path(wt), ignore_errors=True)
+        shutil.rmtree(container.CLONES / f"{wt.name}-verify", ignore_errors=True)
         sh(["git", "branch", "-d", branch], cwd=checkout, check=False)
         state_path(node.id).unlink(missing_ok=True)
         handoff_path(node.id).unlink(missing_ok=True)

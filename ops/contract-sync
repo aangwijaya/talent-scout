@@ -5,7 +5,7 @@ import json
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from lib import REPOS, ROOT, config, gh, gh_env, push_argv, run_code, sh
+from lib import REPOS, ROOT, base_ref, config, gh, gh_env, integration, push_argv, run_code, sh
 
 FILES = {"docs/API.md": "docs/API.md", "docs/EVENTS.md": "docs/EVENTS.md", "docs/PRD.md": "docs/PRD.md",
          "api/openapi.yaml": "src/lib/server/api/openapi.yaml"}
@@ -24,10 +24,13 @@ def server_files(commit):
 def main():
     sh(["git", "fetch", "-q", "origin"], cwd=SERVER)
     sh(["git", "fetch", "-q", "origin"], cwd=CLIENT)
-    head = sh(["git", "rev-parse", "origin/main"], cwd=SERVER).stdout.strip()
+    # Both repos integrate on the same branch: the client follows the server's contract as it is merged,
+    # and the release order (server first) keeps main consistent (ADR 0008).
+    cfg = config()
+    head = sh(["git", "rev-parse", base_ref(cfg)], cwd=SERVER).stdout.strip()
     contents = server_files(head)
     hashes = {FILES[path]: digest(text) for path, text in contents.items()}
-    current = sh(["git", "show", "origin/main:contract.lock"], cwd=CLIENT, check=False)
+    current = sh(["git", "show", f"{base_ref(cfg)}:contract.lock"], cwd=CLIENT, check=False)
     locked = json.loads(current.stdout)["files"] if current.returncode == 0 else {}
     if locked == hashes:
         return 0
@@ -41,20 +44,20 @@ def main():
     if "--check" in sys.argv:
         return 1
     wt = ROOT / "wt" / f"client-contract-{head[:8]}"
-    sh(["git", "worktree", "add", "-q", str(wt), "-b", branch, "--no-track", "origin/main"], cwd=CLIENT)
+    sh(["git", "worktree", "add", "-q", str(wt), "-b", branch, "--no-track", base_ref(cfg)], cwd=CLIENT)
     for path, text in contents.items():
         (wt / FILES[path]).write_text(text)
     (wt / "contract.lock").write_text(json.dumps({"server_commit": head, "files": hashes}, indent=2) + "\n")
     # CI fails the PR when schema.d.ts lags openapi.yaml, so regenerate the types in the same commit.
     # Both run client repo code (lifecycle scripts, gen:api), so they run in the sandbox (ADR 0002).
     for command in ("pnpm install --frozen-lockfile", "pnpm gen:api"):
-        done = run_code(command, str(wt), "client", config(), timeout=600)
+        done = run_code(command, str(wt), "client", cfg, timeout=600)
         if done.returncode:
             raise RuntimeError(f"{command} in the sandbox: {done.stderr.strip()[-500:]}")
     sh(["git", "add", "-A"], cwd=wt)
     sh(["git", "commit", "-qm", f"chore: pin contract to server {head[:8]}"], cwd=wt)
     sh(push_argv(REPOS["client"], branch), cwd=wt, env=gh_env())
-    gh("pr", "create", "-R", REPOS["client"], "--head", branch, "--title", f"chore: pin contract to server {head[:8]}",
+    gh("pr", "create", "-R", REPOS["client"], "--base", integration(cfg), "--head", branch, "--title", f"chore: pin contract to server {head[:8]}",
        "--body", f"Byte-identical copy of the contract at {REPOS['server']}@{head}. Approval happened on the server.")
     sh(["git", "worktree", "remove", "--force", str(wt)], cwd=CLIENT)
     print(f"opened sync PR for {head[:8]}")

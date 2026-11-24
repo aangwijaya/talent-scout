@@ -216,7 +216,8 @@ class RunRecords(LedgerCase):
             handoff.write_text("STATUS: done\nGOAL: g\nTRIED: t\nKNOWN: k\nNEXT: n\nNEVER: x\n")
             return 0, ""
         run.run_agent = agent
-        run.gate = lambda node, wt, cfg, text: {"failures": [], "tier": 2}
+        run.gate = lambda node, wt, cfg, text, base=None: {"failures": [], "tier": 2}
+        run.verify = lambda node, wt, cfg, findings: {"verdict": "merge", "high": [], "gaps": [], "summary": "ok"}
         run.sh = lambda cmd, cwd=None, check=True, env=None: subprocess.CompletedProcess(
             cmd, 1 if cmd[:3] == ["gh", "pr", "view"] else 0, "node/1-x\n", "")
         run.wait_ci = lambda node, branch, cfg: []
@@ -224,7 +225,7 @@ class RunRecords(LedgerCase):
         run.process(self.node(), {"max_attempts": 3, "automerge": [], "budget_usd": 6, "daily_budget_usd": 20})
 
         events = [r["event"] for _, _, r in ledger.records()]
-        self.assertEqual(events, ["run.started", "attempt", "gate", "pr.opened", "ci", "review", "ready"])
+        self.assertEqual(events, ["run.started", "attempt", "gate", "pr.opened", "ci", "review", "verify", "ready"])
         records = {r["event"]: r for _, _, r in ledger.records()}
         self.assertEqual((records["gate"]["tier"], records["gate"]["passed"]), (2, True))
         self.assertEqual((records["review"]["findings"], records["review"]["high"]), (1, 0))
