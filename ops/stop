@@ -1,16 +1,50 @@
 #!/usr/bin/env python3
-"""Kill switch. `ops/stop` halts ops/run after handing work back; `ops/stop --clear` re-enables it and
-ends a quota pause early (the daily budget still holds: it is counted, not paused)."""
+"""Kill switch, in two steps. Every use is recorded in the audit ledger.
+
+ops/stop            hold: nothing new starts; a node already running finishes
+ops/stop --now      also stop running nodes now: their containers are removed, and each node goes back to the
+                    human as "stopped by the human"
+ops/stop --resume   reopen: lift the hold and the stop, and end any quota pause (the daily budget still holds:
+                    it is counted, not paused). --clear is the older name for it.
+"""
+import subprocess
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import budget
-from lib import STOP_FILE
+import container
+import ledger
+from lib import HOLD_FILE, STOP_FILE
 
-if "--clear" in sys.argv:
-    STOP_FILE.unlink(missing_ok=True)
-    budget.resume("human")
-    print("runner enabled")
-else:
+
+def running_boxes():
+    """Agent and check containers. The egress proxy stays: it holds no work and other runs need it."""
+    done = subprocess.run([container.PODMAN, "ps", "--filter", "name=^ts-", "--format", "{{.Names}}"],
+                          capture_output=True, text=True)
+    return [name for name in done.stdout.split() if name != container.PROXY_NAME]
+
+
+def main(argv):
+    if "--resume" in argv or "--clear" in argv:
+        STOP_FILE.unlink(missing_ok=True)
+        HOLD_FILE.unlink(missing_ok=True)
+        budget.resume("human")
+        ledger.append("stop.resumed", actor="human")
+        return print("dispatch reopened")
+    HOLD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    HOLD_FILE.touch()
+    if "--now" not in argv:
+        ledger.append("stop.hold", actor="human")
+        return print("dispatch on hold; a running node finishes. ops/stop --now stops it too")
+    # The runner sees STOP within seconds, kills its agent and hands the node back. Removing the containers
+    # as well means a runner that is stuck, or already gone, can't leave an agent working.
     STOP_FILE.touch()
-    print("stop requested")
+    boxes = running_boxes()
+    if boxes:
+        subprocess.run([container.PODMAN, "rm", "-f", "--ignore", *boxes], capture_output=True)
+    ledger.append("stop.now", actor="human", containers=boxes or None)
+    print(f"stopped; removed {len(boxes)} container(s). ops/stop --resume reopens dispatch")
+
+
+if __name__ == "__main__":
+    main(sys.argv)

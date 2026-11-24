@@ -26,10 +26,11 @@ import importlib.util
 import budget
 import container
 import creds
+import dispatch
 import identity
 import ledger
 from checks import feedback, gate, saw_key
-from lib import (AGENT_LOGIN_KEEP, AGENTS, HANDOFF_DIR, HANDOFF_MARK, OPS, PROXY_ENV_KEEP, REPOS, ROOT, STATE,
+from lib import (AGENT_LOGIN_KEEP, AGENTS, HANDOFF_DIR, HANDOFF_MARK, HOLD_FILE, OPS, PROXY_ENV_KEEP, REPOS, ROOT, STATE,
                  STOP_FILE, TOOLCHAIN_ENV_KEEP, analyze, config, gh, gh_env, handoff_path, load_nodes,
                  load_state, parse_handoff, push_argv, save_state, sh, state_path, with_egress)
 
@@ -328,7 +329,21 @@ def escalate(node, reason, feedback_text="", event="escalated"):
     audit(event, node, reason=reason[:500])
     post_handoff(node, f"STATUS: needs_human\nNEXT: {reason}\nKNOWN: {feedback_text or 'see the run log'}")
     gh("issue", "edit", str(node.number), "-R", REPOS[node.repo], "--add-label", "needs:human")
+    drop_run_label(node)
     print(f"{node.id}: escalated: {reason}")
+
+
+def drop_run_label(node):
+    """The node no longer waits to be dispatched: it is ready, escalated or stopped. Adding the label again
+    is the human's way of saying "run it again"."""
+    if node.has(dispatch.RUN_LABEL):
+        gh("issue", "edit", str(node.number), "-R", REPOS[node.repo], "--remove-label", dispatch.RUN_LABEL)
+        node.labels = [l for l in node.labels if l != dispatch.RUN_LABEL]
+
+
+def comment(node, text):
+    """A status comment on the node's issue, so the human sees it on GitHub's app."""
+    gh("issue", "comment", str(node.number), "-R", REPOS[node.repo], "--body", f"{ledger.anchor()}\n{text}")
 
 
 def open_issue(key):
@@ -430,6 +445,7 @@ def process(node, cfg):
     handoff_file = handoff_path(node.id)
     set_status(node, "status:in-progress")
     audit("run.started", node, agent=node.agent, attempts_before=state["attempts"])
+    comment(node, f"▶️ Started: {node.agent}, attempt {state['attempts'] + 1} of {cfg['max_attempts']}.")
     note = state.get("feedback")
     while True:
         if state["attempts"] >= cfg["max_attempts"]:
@@ -566,12 +582,14 @@ def pr_merge_info(node, branch):
     """Who merged the node's PR, and which checks were red when it merged (a pilot target: none)."""
     try:
         data = json.loads(gh("pr", "view", branch, "-R", REPOS[node.repo], "--json",
-                             "number,mergedBy,statusCheckRollup") or "{}")
+                             "number,mergedBy,statusCheckRollup,reviewDecision") or "{}")
     except (RuntimeError, ValueError) as err:
         return {"lookup_error": str(err)[:200]}
     red = [c.get("name") or c.get("context") for c in data.get("statusCheckRollup") or []
            if (c.get("conclusion") or c.get("state") or "").upper() in ("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT")]
-    return {"pr": data.get("number"), "by": (data.get("mergedBy") or {}).get("login"), "ci_red": red or None}
+    # Without an approval, a merge into a protected branch went through the ruleset's bypass (ADR 0006).
+    return {"pr": data.get("number"), "by": (data.get("mergedBy") or {}).get("login"), "ci_red": red or None,
+            "bypass": data.get("reviewDecision") != "APPROVED"}
 
 
 def check_agent_auth():
@@ -647,9 +665,14 @@ def hand_back(node, stop, cfg):
     elif isinstance(stop, DailySpent):
         next_step = f"the queue resumes after 00:00 {cfg.get('budget_tz', 'Asia/Jakarta')}"
         status = "paused"
+    elif STOP_FILE.exists():
+        next_step, status = "stopped by the human (ops/stop --now); add the `run` label again to restart", "needs_human"
+        drop_run_label(node)
     else:
-        next_step, status = f"resume with ops/run --node {node.id}", "needs_human"
-    audit("handed_back", node, reason=str(stop)[:300], paused=status == "paused" or None)
+        next_step, status = f"add the `run` label again, or ops/run --node {node.id}", "needs_human"
+        drop_run_label(node)
+    audit("handed_back", node, reason=str(stop)[:300], paused=status == "paused" or None,
+          by_human=STOP_FILE.exists() or None)
     post_handoff(node, f"STATUS: {status}\nNEXT: {next_step}\nKNOWN: {stop}")
     set_status(node, "status:todo")
     print(f"{node.id}: handed back: {stop}")
@@ -671,6 +694,9 @@ def main():
     if check_sandbox([repo] if repo else list(REPOS)):
         raise SystemExit("sandbox check failed; see above. Nothing ran.")
     while not STOP_FILE.exists():
+        if HOLD_FILE.exists():
+            print("dispatch is on hold (ops/stop); ops/stop --resume reopens it")
+            return
         held = queue_held(cfg)
         if held:
             print(held)

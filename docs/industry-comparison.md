@@ -62,6 +62,20 @@ Sebagian besar komponen workflow ini sudah lazim di industri, tapi cara kita mer
 | 8 | **Policy-as-code** | Aturan bisa diaudit dan dites | Tier, fence, allowlist egress, dan batas sumber daya ditulis sebagai policy (misalnya OPA/Rego) dan dicek di CI |
 | 9 | **Eval berkelanjutan** | Mengukur mutu agent dari waktu ke waktu | Metrik per node: persentase lolos gate di percobaan pertama, temuan High yang lolos, gap yang ketahuan di Scope, dan biaya per node |
 
+### Status enterprise-lite, tanpa microVM (2026-11-24)
+
+| # | Langkah | Status |
+|---|---|---|
+| 1 | Sandbox microVM atau gVisor | **Dilewati.** Menambah biaya, dan rootless Podman dengan probe dinding sudah menahan ancaman yang ada (ADR 0002, 0003). |
+| 2 | Orchestrator sebagai service | **Dikerjakan** sebagai systemd user service di PC ini, bukan VPS. Dispatch lewat label `run` yang dicek pelakunya (ADR 0007). |
+| 3 | Audit log terpusat | **Dikerjakan** sebagai audit ledger berantai hash, dengan head yang dipublikasikan di setiap PR. Tanpa SIEM. |
+| 4 | Broker secret | **Dikerjakan sebagian.** GitHub App dengan token per run dan `systemd-creds` (ADR 0006). Vault dilewati karena mesinnya hanya satu. |
+| 5 | Auto-merge tier 1 | **Ditunda ke PR F**, yaitu auto-merge ke branch `dev`, sementara rilis ke `main` tetap oleh saya. |
+| 6 | CODEOWNERS dan review bertingkat | **Dilewati.** Manusianya hanya satu, jadi ruleset dengan approval wajib sudah cukup. |
+| 7 | Paralelisme dan kuota | **Dikerjakan.** Satu node per repo, budget harian $20, dan jeda saat kuota habis. Akun Claude kedua dilewati. |
+| 8 | Policy-as-code | **Dikerjakan tanpa OPA**, sebagai policy test di CI yang membaca file aturan aslinya. |
+| 9 | Eval berkelanjutan | **Dikerjakan** lewat `ops/report` dari ledger: lolos gate di percobaan pertama, High yang lolos, intervensi, dan biaya per node. |
+
 ## Kapan naik level
 
 Pemicunya sinyal, bukan tanggal. Naik level sebaiknya dipicu oleh masalah nyata, bukan karena "enterprise terdengar lebih bagus".

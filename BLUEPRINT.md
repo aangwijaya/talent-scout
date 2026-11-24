@@ -314,10 +314,34 @@ loop until ops/STOP exists:
    - **Failure:** feedback, `saws`, `dead_ends`, retry. The same `SAW` twice means escalate.
 
 **Kill switches:**
-- `ops/STOP` stops everything at the next poll.
-- Per run: a time budget, a cost budget (summed from streamed cost events), and an idle limit. A kill terminates the process group and removes the container by name.
+- `ops/stop` holds dispatch, and a running node finishes. `ops/stop --now` writes `ops/STOP`: runners kill their agent within seconds, and the containers are removed. `ops/stop --resume` reopens.
+- Per run: a time budget, a cost budget (the agent's reported cost, capped at what is left of the daily budget), and an idle limit. A kill terminates the process group and removes the container by name.
+- Per day: `daily_budget_usd`, summed from the audit ledger. A quota message ("hit your limit") pauses only that agent until the reset it names.
 
 **Escalation:** a `needs:human` label plus a handoff comment (`STATUS: needs_human`, `NEXT: <reason>`). `ops/triage` lists every escalation.
+
+### 7.1a Enterprise-lite, without a microVM: the service (`ops/service`)
+
+The same orchestrator, run as a systemd user service on the developer's machine instead of from a terminal (ADR 0007 in Talent Scout). It adds what a company would expect from an always-on runner, without paying for a VPS, a vault or microVMs:
+```
+every poll_sec (90 s):
+    reconcile merged nodes; open the contract sync PR if the contract moved
+    if ops/stop is holding: skip the rest
+    for each agent node left in-progress/review with no runner holding its repo:
+        "interrupted": run it once more (still counts toward max_attempts), the second time escalate
+    if today's budget is spent: skip the rest
+    for each repo with no runner:
+        first ready node carrying the `run` label, whose agent is not paused:
+            the label's last adder (issue timeline) must be human_login, else remove it and record dispatch.refused
+            contract-change: `## Decision` starts with "Approved" in a body the human wrote last
+            start `ops/run --node X --once --auto` as a child
+```
+- **Identity:** GitHub App installation tokens per run (ADR 0006), with secrets encrypted by `systemd-creds --user`.
+- **Evidence:** a hash-chained audit ledger, its head published in every PR and handoff, and `ops/report --verify`.
+- **Limits:** one node per repo (a `flock` the kernel drops if a runner dies), a daily budget, and quota pauses per agent.
+- **Policy tests in CI:** the tier, egress, budget and dispatch rules fail CI when a change loosens them past their bounds.
+- **Kept on purpose without:** microVMs (rootless Podman stays the sandbox), a VPS, a vault, OPA and a SIEM. Each is the next step when the trigger in `docs/industry-comparison.md` fires, not before.
+- **Keepalive on WSL:** a Windows scheduled task at login keeps the distro running, and the PC does not sleep on power.
 
 ### 7.2 The gate (`checks.py`). Every check returns evidence, never an opinion.
 | Check | Fails when |
@@ -429,6 +453,7 @@ The wall check is the arbiter. Every line of `probe.sh` must pass on Docker exac
 5. **OpenCode:** a subscription or key with a hard spend cap, and no auto top-up.
 6. **Podman** (`sudo apt install podman`), then `ops/sandbox build` and `ops/run --check-sandbox`.
 7. `tmux` for `ops/auto`.
+8. **The service** (optional, enterprise-lite): create the `run` label in each app repo, set `human_login`, run `ops/service --install`, then `systemctl --user enable --now talent-scout-ops.service` and `loginctl enable-linger $USER`. On WSL, add the keepalive task (WORKFLOW.md).
 
 ---
 

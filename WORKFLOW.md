@@ -4,6 +4,8 @@ The only source for how work runs here. To set up the same architecture in anoth
 
 ## Daily commands
 
+Usually you don't type these: put the **`run` label** on a ready node's issue (from GitHub's phone app too), and the service starts it within two minutes. See "The service and dispatch" below.
+
 ```bash
 ops/next                     # what can run now, computed from GitHub
 ops/triage                   # everything waiting on you, in one list
@@ -13,7 +15,10 @@ ops/run --node client#15     # one node only
 ops/auto client#15           # reconcile, then that node with --once --auto in a detached tmux session
 ops/run --reconcile          # after you merge: drop stale labels, remove merged worktrees
 ops/brief client#15          # the exact context a session receives
-ops/stop                     # hand work back and halt; ops/stop --clear re-enables and ends a quota pause
+ops/stop                     # hold: nothing new starts, a running node finishes
+ops/stop --now               # also stop running nodes now and remove their containers
+ops/stop --resume            # reopen dispatch and end any quota pause (--clear is the old name)
+journalctl --user -u talent-scout-ops -f   # watch the service
 ops/report                   # per-node results from the audit ledger, and the tier 1 auto-merge targets
 ops/report --verify          # check the ledger chain and every head published on GitHub
 ops/report --note client#12 intervention "fixed the lint by hand" --by lead
@@ -137,7 +142,8 @@ Like the planning skills, they need a human, so a headless agent must never load
 - `run.started`, `attempt` (with cost and refused egress, or why it was stopped), and `gate` (tier, pass, failed checks);
 - `pr.opened`, `ci`, `review.run` (the reviewer's cost), and `review` (finding and High counts);
 - `queue.paused` and `queue.resumed` (which agent, why, until when, and who ended it), and `dispatch.busy`;
-- `ready`, `escalated`, `handed_back`, `parked`, and `merged`, with who merged and which checks were red at the time.
+- `dispatched` (by whom), `dispatch.refused` (why), `interrupted`, and `stop.hold`, `stop.now` and `stop.resumed`;
+- `ready`, `escalated`, `handed_back`, `parked`, and `merged`, with who merged, which checks were red at the time, and `bypass` when it merged without an approval.
 
 **Where it lives:** `~/.local/state/talent-scout-ops/audit-YYYY-MM.jsonl` (or `$OPS_LEDGER_DIR`). That's outside the repo and outside every sandbox mount, and the files are never deleted.
 
@@ -158,6 +164,46 @@ Like the planning skills, they need a human, so a headless agent must never load
 - Most gaps found at SCOPE, not mid-implementation
 
 Tier 1 auto-merge needs the last 10 merged tier 1 nodes in the ledger to meet the first two lines. `ops/report` shows where they stand.
+
+## The service and dispatch
+
+The orchestrator runs as a systemd user service, `ops/service` (ADR 0007). Every 90 seconds (`poll_sec`) it reads GitHub and:
+1. tidies up after your merges (what `ops/run --reconcile` did by hand), and opens the client's contract sync PR when the server contract moved;
+2. gives an **interrupted** node one more go. That's a node left `status:in-progress` or `status:review` with no runner holding its repo: a crash, a restart, or the PC asleep. The attempt still counts toward `max_attempts`, and a second interruption goes to you;
+3. starts, for each repo with nothing running, the first ready node that carries the **`run` label**. One node per repo, so two at most.
+
+**Who may dispatch.** The service asks the issue timeline who added `run`. Only `human_login` (your account) counts. A label from anyone else, an agent or an App included, comes off: the issue gets a "Not started" comment and the ledger records `dispatch.refused`. A **contract-change** node also needs `## Decision` to start with "Approved", in an issue body you wrote last. If the orchestrator edited the body (adding a gap to `blocked_by`), open the issue and save it once more.
+
+**What you see on GitHub.** The service comments when a node starts, is refused, is interrupted, is ready or needs you, and it keeps the `status:*` labels current. The `run` label comes off when the node is ready, escalated or stopped by you, so adding it again means "run it again". A node paused by quota or by the daily budget keeps its label and goes again by itself.
+
+`ops/auto client#15` still works as the manual path. While it holds a repo, the service leaves that repo alone.
+
+### One-time setup (human)
+
+1. Create the label in both app repos:
+   ```bash
+   gh label create run -R aangwijaya/talent-scout-client --color 0E8A16 --description "Start this node (only the human's label counts)"
+   gh label create run -R aangwijaya/talent-scout-server --color 0E8A16 --description "Start this node (only the human's label counts)"
+   ```
+2. Install and start the service, and let it start with the distro instead of with a login:
+   ```bash
+   ops/service --install
+   systemctl --user daemon-reload
+   systemctl --user enable --now talent-scout-ops.service
+   loginctl enable-linger $USER
+   ```
+3. Keep WSL alive. WSL shuts the distro down soon after the last Windows window into it closes, and the service goes with it. In Windows, create a task that starts a hidden WSL process at login. Run this in PowerShell, with your distro name from `echo $WSL_DISTRO_NAME`:
+   ```powershell
+   $action  = New-ScheduledTaskAction -Execute "powershell.exe" `
+                -Argument '-WindowStyle Hidden -Command "wsl.exe -d Ubuntu-26.04 --exec sleep infinity"'
+   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+   $set     = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+   Register-ScheduledTask -TaskName "WSL keepalive" -Action $action -Trigger $trigger -Settings $set
+   ```
+   A window flashes for a moment at login, then the process stays hidden. `Get-ScheduledTask "WSL keepalive"` shows the task, and `Start-ScheduledTask "WSL keepalive"` starts it now without logging out.
+4. Keep the PC awake while it's plugged in: `powercfg /change standby-timeout-ac 0` in PowerShell. If it sleeps anyway, the service carries on when it wakes, and a node cut off mid-run counts as interrupted.
+
+Check it with `systemctl --user status talent-scout-ops` and `journalctl --user -u talent-scout-ops -f`. The runner of each node writes to `ops/.state/service-<repo>.log`.
 
 ## Setup that only a human can do
 

@@ -38,3 +38,7 @@ orchestrator_app_id: 0
 # Where the orchestrator's secrets live (ADR 0006). files: plain files under ops/env.
 # creds: encrypted with systemd-creds --user under ~/.config/talent-scout-ops/secrets (ops/creds).
 secret_store: files
+# The service (ops/service, ADR 0007) starts a node only when this GitHub account added its `run` label,
+# and only a contract-change whose Decision this account wrote. It looks at GitHub every poll_sec seconds.
+human_login: aangwijaya
+poll_sec: 90
