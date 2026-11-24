@@ -233,7 +233,10 @@ class RunRecords(LedgerCase):
         self.assertRegex(create[-1], r"audit-ledger-head: seq 4 sha256 [0-9a-f]{64}")
         comments = [c[-1] for c in self.gh_calls if c[:2] == ("issue", "comment")]
         self.assertTrue(comments and all("audit-ledger-head: seq" in c for c in comments))
-        self.assertTrue(all(lib.parse_handoff(c).get("STATUS") for c in comments), "the head never breaks a handoff")
+        handoffs = [c for c in comments if lib.HANDOFF_MARK in c]
+        self.assertTrue(handoffs and all(lib.parse_handoff(c).get("STATUS") for c in handoffs),
+                        "the head never breaks a handoff")
+        self.assertTrue(any("Started" in c for c in comments), "the human sees the node start")
         self.assertEqual(ledger.verify()[0], [])
 
     def test_escalation_and_hand_back_count_as_interventions(self):
@@ -247,7 +250,9 @@ class RunRecords(LedgerCase):
                                         {"name": "contract", "conclusion": "FAILURE"}]}
         self.run.gh = lambda *a: json.dumps(rollup)
         self.assertEqual(self.run.pr_merge_info(self.node(), "node/1-x"),
-                         {"pr": 7, "by": "aangwijaya", "ci_red": ["contract"]})
+                         {"pr": 7, "by": "aangwijaya", "ci_red": ["contract"], "bypass": True})
+        rollup["reviewDecision"] = "APPROVED"
+        self.assertFalse(self.run.pr_merge_info(self.node(), "node/1-x")["bypass"])
 
         def broken(*a):
             raise RuntimeError("no PR")

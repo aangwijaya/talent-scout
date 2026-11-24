@@ -157,7 +157,7 @@ flowchart TB
 
 ## E. Setelah merge
 
-1. `ops/run --reconcile` menghapus label basi dan worktree yang sudah di-merge, sehingga node yang terblokir menjadi siap.
+1. Service merapikan label basi dan worktree yang sudah di-merge dalam dua menit, sehingga node yang terblokir menjadi siap. Saya tidak perlu menjalankan apa pun (dulu: `ops/run --reconcile`).
 2. **Sinkronisasi kontrak:** kalau kontrak server berubah, orchestrator membuka PR sync di client. `contract.lock` mengunci commit server beserta hash file-nya.
 3. **Live gate:** untuk perubahan prompt atau model, saya menjalankan tiga CV asli lewat model asli dengan key yang dibatasi. Lead agent membaca log-nya: biaya, truncation dan output.
 4. **Langkah production:** migrasi dan perubahan data disiapkan dan dicoba dulu di schema `test`. Saya yang menjalankannya di production.
@@ -177,6 +177,31 @@ Sebelum sandbox jadi satu-satunya mode, ia dijalankan dulu pada empat node sungg
 | Node menunggu dirinya sendiri | Draf gap dari agent menyebut nomor node-nya sendiri, dan node itu terkunci | Gap hanya bisa memblokir lewat issue nyata yang masih open (#21) |
 
 Verifier juga bekerja di luar sandbox. Contohnya di client#91: ia menemukan enam perilaku yang lolos semua test (live region, throttle, `viewport-fit`, `theme-color`, ukuran tombol, satu tombol utama). Keenamnya sekarang dijaga test, dan setiap test dibuktikan dengan sabotase satu baris.
+
+## G. Dispatch: saya yang memulai, service yang menjalankan
+
+Orchestrator berjalan sebagai service di PC saya (ADR 0007). Saya memulai node dengan memberi label **`run`** di issue-nya, bisa dari HP.
+
+```mermaid
+flowchart LR
+  H[Saya: label run] --> S{Service, tiap 90 detik}
+  S -->|siapa yang memasang label?| T[Timeline issue]
+  T -->|akun saya| C{Contract-change?}
+  T -->|akun lain, termasuk agent| R[Label dicabut, komentar, dispatch.refused di ledger]
+  C -->|tidak| G[Mulai node: satu per repo]
+  C -->|ya, Decision Approved ditulis saya| G
+  C -->|ya, tanpa Approved| R
+  G --> L[Komentar Started, label status]
+  L --> N[Node loop, lalu siap di-merge atau eskalasi]
+  N --> U[Label run dicabut]
+```
+
+- **Batas:** satu node per repo (maksimal dua), budget $20 per hari, dan jeda per agent saat kuota habis.
+- **Kalau terputus** (PC tidur, crash, restart): node diulang sekali, lalu ke saya.
+- **Kill switch:** `ops/stop` menahan dispatch, `ops/stop --now` menghentikan node yang sedang jalan, `ops/stop --resume` membuka lagi.
+- **Bukti:** setiap dispatch, penolakan, jeda dan stop tercatat di audit ledger berantai hash.
+
+---
 
 ## Lampiran 1. Alur aplikasi
 

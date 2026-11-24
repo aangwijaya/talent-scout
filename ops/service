@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""The orchestrator as an always-on service on this machine (ADR 0007).
+
+ops/service             the loop; systemd runs it (ops/service --install writes the unit)
+ops/service --once      one tick, then exit
+ops/service --install   write the systemd user unit and say how to enable it
+
+Every tick (poll_sec), from GitHub's state:
+1. tidy after merges (reconcile), and open the client's contract sync PR when the server contract moved;
+2. a node left `status:in-progress` or `status:review` with no runner holding its repo was interrupted
+   (a crash, a restart, the PC asleep): it runs again once, and the second time it goes to the human;
+3. for each repo with nothing running, start the first ready node that carries the `run` label, if the
+   human added it (ops/dispatch.py). One node per repo, so at most two at a time.
+
+`ops/stop` holds step 3, `ops/stop --now` stops running nodes too. The node itself runs in a child
+`ops/run --node X --once --auto`, the same path `ops/auto` takes.
+"""
+import importlib.machinery
+import importlib.util
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import budget
+import container
+import dispatch
+from lib import HOLD_FILE, OPS, REPOS, ROOT, STATE, STOP_FILE, analyze, config, load_nodes, sh
+
+_loader = importlib.machinery.SourceFileLoader("run", str(OPS / "run"))
+_spec = importlib.util.spec_from_loader("run", _loader)
+run = importlib.util.module_from_spec(_spec)
+_loader.exec_module(run)
+
+UNIT = "talent-scout-ops.service"
+ACTIVE = ("status:in-progress", "status:review")
+children = {}  # repo -> (node id, Popen)
+stopping = False
+
+
+def log(text):
+    print(f"{time.strftime('%F %T')} {text}", flush=True)
+
+
+def reap():
+    """Forget children that have finished; their own records are already in the ledger."""
+    for repo, (node_id, child) in list(children.items()):
+        if child.poll() is not None:
+            log(f"{node_id}: runner exited {child.returncode}")
+            del children[repo]
+
+
+def repo_free(repo):
+    """True when no runner (this service's or a human's ops/auto) holds the repo."""
+    if repo in children:
+        return False
+    try:
+        with budget.repo_lock(repo):
+            return True
+    except budget.Busy:
+        return False
+
+
+def remove_boxes(node):
+    """Agent containers of an interrupted node, if any outlived their runner."""
+    prefix = f"-{node.repo}-{node.number}-"
+    names = [n for n in subprocess.run([container.PODMAN, "ps", "--filter", "name=^ts-", "--format", "{{.Names}}"],
+                                       capture_output=True, text=True).stdout.split() if prefix in n]
+    if names:
+        subprocess.run([container.PODMAN, "rm", "-f", "--ignore", *names], capture_output=True)
+    return names
+
+
+def recover(node, cfg):
+    """A node that was running when its runner died runs again once; a second time goes to the human.
+    The interrupted attempt already counted toward max_attempts when it started."""
+    state = run.load_state(node.id)
+    state["interrupted"] = state.get("interrupted", 0) + 1
+    run.save_state(node.id, state)
+    boxes = remove_boxes(node)
+    run.audit("interrupted", node, count=state["interrupted"], attempts=state["attempts"], containers=boxes or None)
+    if state["interrupted"] > 1 or state["attempts"] >= cfg["max_attempts"]:
+        return run.escalate(node, f"interrupted {state['interrupted']} times (attempt {state['attempts']} of "
+                                  f"{cfg['max_attempts']}); see the run log")
+    run.set_status(node, "status:todo")
+    run.comment(node, "⚠️ Interrupted (the runner stopped mid-node). It runs again once from the start.")
+    log(f"{node.id}: interrupted, queued to run again")
+
+
+def refuse(node, reason):
+    run.audit("dispatch.refused", node, reason=reason[:300])
+    run.drop_run_label(node)
+    run.comment(node, f"⛔ Not started: {reason}. Only the human's `run` label starts a node.")
+    log(f"{node.id}: dispatch refused: {reason}")
+
+
+def start(node, actor):
+    STATE.mkdir(parents=True, exist_ok=True)
+    out = open(STATE / f"service-{node.repo}.log", "a")
+    child = subprocess.Popen([sys.executable, str(OPS / "run"), "--node", node.id, "--once", "--auto"],
+                             cwd=ROOT, stdout=out, stderr=subprocess.STDOUT, start_new_session=False)
+    out.close()
+    children[node.repo] = (node.id, child)
+    log(f"{node.id}: dispatched by {actor}, runner pid {child.pid}")
+
+
+def sync_contract():
+    """The client runner owns the contract pin. Exit 1 is drift; contract-sync opens at most one PR."""
+    if "client" in children:
+        return
+    if sh([str(OPS / "contract-sync"), "--check"], check=False).returncode == 1:
+        done = sh([str(OPS / "contract-sync")], check=False)
+        log(f"contract sync: {(done.stdout or done.stderr).strip()[-200:]}")
+
+
+def tick(cfg):
+    reap()
+    nodes = load_nodes(ttl=0)
+    run.reconcile({k: n for k, n in nodes.items() if n.repo not in children})
+    sync_contract()
+    if STOP_FILE.exists() or HOLD_FILE.exists():
+        return "on hold"
+    for node in nodes.values():
+        if (not node.closed and node.agent in ("claude", "opencode") and any(node.has(s) for s in ACTIVE)
+                and not node.has("needs:human") and repo_free(node.repo)):
+            recover(node, cfg)
+    held = run.queue_held(cfg)
+    if held:
+        return held
+    graph = analyze(nodes)
+    pauses = budget.paused()
+    for repo in REPOS:
+        if not repo_free(repo):
+            continue
+        ready = [k for k in graph["ready"] if nodes[k].repo == repo and nodes[k].has(dispatch.RUN_LABEL)
+                 and nodes[k].agent in ("claude", "opencode")]
+        ready, _ = run.split_paused(ready, nodes, pauses)
+        for key in ready:
+            try:
+                actor = dispatch.check(nodes[key], cfg["human_login"])
+            except dispatch.Refused as refused:
+                refuse(nodes[key], str(refused))
+                continue
+            run.audit("dispatched", nodes[key], by=actor)
+            start(nodes[key], actor)
+            break
+    return None
+
+
+def on_term(signum, frame):
+    global stopping
+    stopping = True
+
+
+def loop(cfg):
+    signal.signal(signal.SIGTERM, on_term)
+    log(f"service up: polling every {cfg['poll_sec']} s as {cfg['human_login']}'s orchestrator")
+    while not stopping:
+        try:
+            note = tick(cfg)
+            if note:
+                log(note)
+        except Exception as err:  # GitHub or the network had a bad minute; try again next tick
+            log(f"tick failed: {type(err).__name__}: {str(err)[-300:]}")
+        for _ in range(cfg["poll_sec"]):
+            if stopping:
+                break
+            time.sleep(1)
+            reap()
+    # systemd stops the children with the service; on the next start they show up as interrupted.
+    log("service stopping")
+
+
+def unit_text():
+    path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    return f"""[Unit]
+Description=Talent Scout orchestrator (ADR 0007)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={ROOT}
+ExecStart={shutil.which("python3") or "/usr/bin/python3"} {OPS / "service"}
+# The orchestrator needs gh, git and podman from your shell's PATH.
+Environment=PATH={path}
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=60
+KillMode=control-group
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def install():
+    target = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user" / UNIT
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(unit_text())
+    print(f"wrote {target}\nnext:\n  systemctl --user daemon-reload\n  systemctl --user enable --now {UNIT}\n"
+          f"  loginctl enable-linger $USER     # start with the distro, not with a login\n"
+          f"  journalctl --user -u {UNIT} -f   # watch it")
+
+
+def main(argv):
+    if "--install" in argv:
+        return install()
+    cfg = config()
+    if "--once" in argv:
+        note = tick(cfg)
+        if note:
+            log(note)
+        for _, child in children.values():
+            child.wait()
+        return
+    loop(cfg)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

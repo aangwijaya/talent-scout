@@ -67,8 +67,12 @@ How costly a change is to undo, computed from its paths; it decides who must app
 _Avoid_: risk level, priority
 
 **Dispatch**:
-The human's signal that one node may run now; the orchestrator starts a node only on a dispatch from the human.
+The human's signal that one node may run now; the orchestrator starts a node only on a dispatch from the human. A dispatch from anyone else is refused.
 _Avoid_: trigger, kick off, schedule
+
+**Interrupted**:
+A node whose run stopped because the orchestrator itself stopped (a crash, a restart, the machine asleep), not because of its own work. It runs again once, then goes to the human.
+_Avoid_: failed (a failure is the node's own), stopped (the human's choice)
 
 **Integration branch**:
 The branch nodes merge into, by themselves when their tier allows; production never deploys from it.

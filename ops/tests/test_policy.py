@@ -36,7 +36,7 @@ HOST = re.compile(r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2
 LIMITS = {"sandbox_cpus": (1, 8), "sandbox_pids": (64, 4096), "budget_usd": (1, 10),
           "timeout_min": (10, 120), "review_timeout_min": (5, 60), "idle_min": (2, 30),
           "max_attempts": (1, 5), "ci_wait_min": (5, 60), "daily_budget_usd": (1, 50),
-          "quota_pause_min": (15, 24 * 60)}
+          "quota_pause_min": (15, 24 * 60), "poll_sec": (30, 600)}
 MAX_MEMORY = 8 * 1024 ** 3
 
 
@@ -78,6 +78,16 @@ class BudgetPolicy(unittest.TestCase):
     def test_the_budget_day_is_a_real_time_zone(self):
         from zoneinfo import ZoneInfo
         ZoneInfo(self.cfg["budget_tz"])
+
+
+class DispatchPolicy(unittest.TestCase):
+    cfg = lib.config()
+
+    def test_only_a_person_can_dispatch(self):
+        login = self.cfg.get("human_login", "")
+        self.assertRegex(login, r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$", "one GitHub login")
+        self.assertNotIn("[bot]", login)
+        self.assertFalse(login.startswith(("ts-agent", "ts-orchestrator")), "an App must never dispatch")
 
 
 class IdentityPolicy(unittest.TestCase):
