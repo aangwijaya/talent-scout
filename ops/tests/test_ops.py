@@ -555,7 +555,8 @@ class KillSwitch(unittest.TestCase):
 
         run.run_agent, run.gh = stalled, lambda *a: comments.append(a) or ""
         run.sh = lambda cmd, cwd=None, check=True: subprocess.CompletedProcess(cmd, 0, "node/1-x\n", "")
-        findings = run.independent_review(node(1), "/tmp", {"timeout_min": 60, "review_timeout_min": 20})
+        findings = run.independent_review(node(1), "/tmp", {"timeout_min": 60, "review_timeout_min": 20,
+                                                         "budget_usd": 6, "daily_budget_usd": 20})
         self.assertIsNone(findings)
         self.assertEqual(run.REVIEW_UNAVAILABLE, "no output for 10 min")
         self.assertTrue(any("Independent review unavailable" in str(c) for c in comments))

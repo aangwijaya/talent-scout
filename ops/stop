@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Kill switch. `ops/stop` halts ops/run after handing work back; `ops/stop --clear` re-enables it."""
+"""Kill switch. `ops/stop` halts ops/run after handing work back; `ops/stop --clear` re-enables it and
+ends a quota pause early (the daily budget still holds: it is counted, not paused)."""
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import budget
 from lib import STOP_FILE
 
 if "--clear" in sys.argv:
     STOP_FILE.unlink(missing_ok=True)
+    budget.resume("human")
     print("runner enabled")
 else:
     STOP_FILE.touch()
