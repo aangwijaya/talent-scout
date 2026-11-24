@@ -5,7 +5,7 @@ import json
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from lib import REPOS, ROOT, gh, sh
+from lib import REPOS, ROOT, config, gh, run_code, sh
 
 FILES = {"docs/API.md": "docs/API.md", "docs/EVENTS.md": "docs/EVENTS.md", "docs/PRD.md": "docs/PRD.md",
          "api/openapi.yaml": "src/lib/server/api/openapi.yaml"}
@@ -46,8 +46,11 @@ def main():
         (wt / FILES[path]).write_text(text)
     (wt / "contract.lock").write_text(json.dumps({"server_commit": head, "files": hashes}, indent=2) + "\n")
     # CI fails the PR when schema.d.ts lags openapi.yaml, so regenerate the types in the same commit.
-    sh(["pnpm", "install", "--frozen-lockfile"], cwd=wt)
-    sh(["pnpm", "gen:api"], cwd=wt)
+    # Both run client repo code (lifecycle scripts, gen:api), so they run in the sandbox (ADR 0002).
+    for command in ("pnpm install --frozen-lockfile", "pnpm gen:api"):
+        done = run_code(command, str(wt), "client", config(), timeout=600)
+        if done.returncode:
+            raise RuntimeError(f"{command} in the sandbox: {done.stderr.strip()[-500:]}")
     sh(["git", "add", "-A"], cwd=wt)
     sh(["git", "commit", "-qm", f"chore: pin contract to server {head[:8]}"], cwd=wt)
     sh(["git", "push", "-q", "-u", "origin", "HEAD"], cwd=wt)
