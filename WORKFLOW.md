@@ -59,6 +59,15 @@ Models are pinned in `ops/tiers.yaml`: `claude_model` and `claude_effort` for Cl
 
 `automerge` in `ops/tiers.yaml` starts empty. Add 1, then 2, after the pilot targets below pass. Removing a number turns it off again.
 
+The control plane has its own CI (`.github/workflows/ops.yml`, check `ops`). It runs `ops/tests`, including the policy tests in `ops/tests/test_policy.py`. These test the real `ops/tiers.yaml` and `ops/egress-allowlist`:
+- sensitive paths stay tier 3;
+- product code is never tier 1;
+- `automerge` never holds 3;
+- every allowlist entry is one exact hostname, never an IP;
+- sandbox and run limits stay in their ranges.
+
+Loosening a rule past its bound means changing the test in the same PR, where the change is easy to see.
+
 ## Findings
 
 Every finding takes exactly one path:
@@ -108,7 +117,7 @@ Like the planning skills, they need a human, so a headless agent must never load
 ## Setup that only a human can do
 
 - `ops/env/client.env.agent` and `ops/env/server.env.agent`: agent credentials only, pointing at a separate Supabase project, with `LLM_MODE=fake` and `EMAIL_MODE=log`. They are gitignored.
-- Required status checks on `main`: client `checks` and `contract`, server `test`.
+- Required status checks on `main`: client `checks` and `contract`, server `test`, and in this control plane `ops`.
 
 ## Sandbox
 

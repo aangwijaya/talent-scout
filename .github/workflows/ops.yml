@@ -1,0 +1,22 @@
+# Control-plane CI: the orchestrator's tests and the policy tests (ops/tests/test_policy.py).
+# Required on main by branch protection, so no change to ops/ merges untested.
+name: ops
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  ops:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # Pinned to a commit, not a tag: a moved tag can't change what runs here. v4.2.2.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Git identity for the test fixtures
+        run: git config --global user.name ops-ci && git config --global user.email ops-ci@users.noreply.github.com
+      - name: Tests
+        run: python3 -m unittest discover -s ops/tests
