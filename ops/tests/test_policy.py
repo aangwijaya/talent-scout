@@ -35,7 +35,8 @@ HOST = re.compile(r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2
 # Safe ranges for the sandbox and run limits.
 LIMITS = {"sandbox_cpus": (1, 8), "sandbox_pids": (64, 4096), "budget_usd": (1, 10),
           "timeout_min": (10, 120), "review_timeout_min": (5, 60), "idle_min": (2, 30),
-          "max_attempts": (1, 5), "ci_wait_min": (5, 60)}
+          "max_attempts": (1, 5), "ci_wait_min": (5, 60), "daily_budget_usd": (1, 50),
+          "quota_pause_min": (15, 24 * 60)}
 MAX_MEMORY = 8 * 1024 ** 3
 
 
@@ -66,6 +67,17 @@ class TierPolicy(unittest.TestCase):
             self.assertTrue(low <= value <= high, f"{key}={value} outside {low}..{high}")
         memory = container.parse_bytes(self.cfg["sandbox_memory"])
         self.assertTrue(256 * 1024 ** 2 <= memory <= MAX_MEMORY, f"sandbox_memory={self.cfg['sandbox_memory']}")
+
+
+class BudgetPolicy(unittest.TestCase):
+    cfg = lib.config()
+
+    def test_a_day_holds_at_least_one_whole_run(self):
+        self.assertGreaterEqual(self.cfg["daily_budget_usd"], self.cfg["budget_usd"])
+
+    def test_the_budget_day_is_a_real_time_zone(self):
+        from zoneinfo import ZoneInfo
+        ZoneInfo(self.cfg["budget_tz"])
 
 
 class IdentityPolicy(unittest.TestCase):

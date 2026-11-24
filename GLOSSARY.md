@@ -106,6 +106,14 @@ _Avoid_: shared cache, module cache
 The append-only, tamper-evident record of what the orchestrator did and decided: dispatches, runs, gates, costs, refusals and merges.
 _Avoid_: log (a run's own output), history
 
+**Daily budget**:
+The most the agents' reported cost may add up to in one day, counted from midnight Jakarta time. A run may spend only what is left of it.
+_Avoid_: cost limit (one run has its own, the run budget)
+
+**Pause**:
+A hold on starting new work for one agent until its plan's quota comes back. The interrupted node goes back to the queue and is not counted as failed.
+_Avoid_: stop (the human's kill switch), parked (a node waiting behind a gap)
+
 **Policy test**:
 A test of the control plane's own rules (tiers, the egress allowlist, limits) that fails when a change loosens one past its bound.
 _Avoid_: lint, config check
