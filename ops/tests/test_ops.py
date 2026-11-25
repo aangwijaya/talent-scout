@@ -671,9 +671,10 @@ class Reconcile(unittest.TestCase):
                 self.git("worktree", "add", "-q", "-b", f"node/{n}", str(root / "wt" / f"server-{n}"), "origin/main",
                          cwd=checkout)
                 self.git("commit", "-q", "--allow-empty", "-m", f"work {n}", cwd=root / "wt" / f"server-{n}")
-            self.git("push", "-q", "origin", "node/9001:main", cwd=checkout)
+            self.git("push", "-q", "origin", "node/9001:dev", cwd=checkout)  # merged into the integration branch
             calls = []
             run.ROOT, run.gh = root, lambda *a: calls.append(a) or ""
+            run.config = lambda: {"integration_branch": "dev"}
             run.pr_merge_info = lambda node, branch: {"pr": 7, "by": "human", "ci_red": None}
             nodes = {n.id: n for n in (node(9001, "server", closed=True, labels=["status:review", "needs:human", "type:gap"]),
                                        node(9002, "server", closed=True))}

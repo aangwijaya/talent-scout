@@ -326,6 +326,10 @@ def _clone(wt, clone):
     _git(CLONES, "clone", "-q", "--no-hardlinks", "--no-checkout", str(source), str(clone))
     import lib
     for ref in dict.fromkeys(["main", lib.integration(lib.config())]):
+        # Only the refs the human's repository has: a fixture, or a checkout not fetched since `dev` appeared.
+        if subprocess.run(["git", "rev-parse", "-q", "--verify", f"refs/remotes/origin/{ref}"], cwd=source,
+                          capture_output=True).returncode:
+            continue
         _git(clone, "fetch", "-q", str(source), f"+refs/remotes/origin/{ref}:refs/remotes/origin/{ref}")
     _git(clone, "checkout", "-q", "-B", branch, f"refs/remotes/origin/{branch}")
     return clone
