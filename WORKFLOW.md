@@ -40,7 +40,7 @@ checks: [pnpm test]
 
 - `fence`: the paths this node may change. The test file beside a fenced file is inside too (`a.test.ts` or `a.spec.ts` for `a.ts` or `a.svelte`, `a_test.go` for `a.go`). Don't use `[` or `]` in globs, because they mean a character class. `*` also matches `/`.
 - `blocked_by`: real dependencies. Test each arrow: what would break if B started before A finished? If nothing, delete it.
-- `checks`: extra commands that prove this node. `red: false` opts out of the red check, for work with no behavior to test first.
+- `checks`: extra commands that prove this node. `red: false` opts out of the red check, for work with no behavior to test first. A change to only docs and the files in `no_behavior` (`ops/tiers.yaml`, today `api/openapi.yaml`) skips it without the opt-out, because a contract document has nothing to test first.
 
 An issue without a block is reported as unmapped and never runs. `day:N` labels no longer decide order. Gaps run first, then the node that unblocks the most others.
 
@@ -55,7 +55,7 @@ An issue without a block is reported as unmapped and never runs. `day:N` labels 
 7. **REVIEW**: for tier 2 and 3, a fresh session of the other agent sees only the issue and the diff. Its findings are posted on the PR.
 8. **MERGE or ESCALATE**, by tier. When a PR waits for you, the runner prints its link.
 
-On failure the agent gets `EXPECTED / SAW / FENCE / DEAD ENDS` and retries. If the same `SAW` returns twice, or the attempt budget is spent, the node goes to `needs:human`.
+On failure the agent gets `EXPECTED / SAW / FENCE / DEAD ENDS` and retries. If the same `SAW` returns twice, or the attempt budget is spent, the node goes to `needs:human` and back to `status:todo`. Fix what it needs (the issue, the fence), then add `run` again: the service runs it from attempt 1, and the last run's feedback and dead ends stay in the brief.
 
 Models are pinned in `ops/tiers.yaml`: `claude_model` and `claude_effort` for Claude, `opencode_model` and `opencode_effort` (sent as `--variant`) for OpenCode (`opencode models --verbose` lists the ids). They apply to both the worker and the reviewer role. Each agent call is limited by `timeout_min` and by its share of the budget (below): OpenCode is stopped when its cost events pass it, and Claude enforces it itself. Outside the worktree, agents may only write `ops/.state/handoff/` with their edit tools and read the Go module cache. Shell commands are not fenced this way.
 
@@ -222,7 +222,9 @@ The orchestrator runs as a systemd user service, `ops/service` (ADR 0007). Every
 
 **Who may dispatch.** The service asks the issue timeline who added `run`. Only `human_login` (your account) counts. A label from anyone else, an agent or an App included, comes off: the issue gets a "Not started" comment and the ledger records `dispatch.refused`. A **contract-change** node also needs `## Decision` to start with "Approved", in an issue body you wrote last. If the orchestrator edited the body (adding a gap to `blocked_by`), open the issue and save it once more.
 
-**What you see on GitHub.** The service comments when a node starts, is refused, is interrupted, is ready or needs you, and it keeps the `status:*` labels current. The `run` label comes off when the node is ready, escalated or stopped by you, so adding it again means "run it again". A node paused by quota or by the daily budget keeps its label and goes again by itself.
+**What you see on GitHub.** The service comments when a node starts, is refused, is interrupted, is ready or needs you, and it keeps the `status:*` labels current. The `run` label comes off when the node is ready, escalated or stopped by you, so adding it again means "run it again". On an escalated node that **re-arms** it: `needs:human` comes off, the attempts start over, and the ledger records `rearmed`. On a ready node it does nothing, because its PR waits for your merge.
+
+**GitHub's bad minutes.** A GraphQL "Something went wrong", a 502/503/504 or a dropped connection is tried again after 3, 10 and 30 seconds before the tick gives up. A real error (404, 403, a missing label) fails at once. A retried comment can rarely post twice. A node paused by quota or by the daily budget keeps its label and goes again by itself.
 
 `ops/auto client#15` still works as the manual path. While it holds a repo, the service leaves that repo alone.
 

@@ -2,6 +2,9 @@
 # all-tier1 stays tier 1, everything else is tier 2.
 tier3: [docs/API.md, docs/EVENTS.md, docs/PRD.md, api/openapi.yaml, contract.lock, src/hooks.server.ts, src/lib/server/session.ts, src/lib/server/guards.ts, internal/store/migrations/*, internal/http/middleware/auth*, internal/auth/*, internal/email/*, cmd/migrate/*, cmd/seed/*, config/seed-job.yaml, Dockerfile, vercel.json, .github/*, CLAUDE.md, AGENTS.md, .claude/*, .opencode/*, opencode.json]
 tier1: [*.md, docs/*, *.test.ts, *.spec.ts, *.e2e.ts, *_test.go, testdata/*]
+# Files that describe behavior without having any. A change to only these and tier 1 files has nothing to
+# test first, so the gate skips the red check (server#99: the contract docs plus openapi.yaml). Never code.
+no_behavior: [api/openapi.yaml]
 # Always allowed outside a node's fence.
 always_allowed: [docs/LESSONS.md, pnpm-lock.yaml, go.sum, go.mod, package.json]
 # Tiers that merge by themselves into the integration branch after green CI, a review with no High and the

@@ -254,6 +254,24 @@ class Gate(unittest.TestCase):
         self.assertEqual(result["failures"], [])
         self.assertEqual(result["tier"], 1)
 
+    def test_a_contract_docs_change_skips_red(self):
+        """server#99: docs plus api/openapi.yaml describe behavior but have none to test first."""
+        self.write("docs/API.md", "x\n")
+        self.write("api/openapi.yaml", "openapi: 3.1.0\n")
+        self.commit()
+        result = self.run_gate(block="fence: [docs/API.md, api/openapi.yaml]\nchecks: [true]\n",
+                               labels=("contract-change",))
+        self.assertEqual(result["failures"], [])
+        self.assertEqual(result["tier"], 3)
+
+    def test_code_beside_the_spec_still_needs_red(self):
+        self.write("api/openapi.yaml", "openapi: 3.1.0\n")
+        self.write("internal/http/handler.go", "package http\n")
+        self.commit()
+        result = self.run_gate(block="fence: [api/openapi.yaml, internal/*]\nchecks: [true]\n",
+                               labels=("contract-change",))
+        self.assertEqual(self.failed(result), {"red"})
+
     def test_red_check_leaves_no_worktree_behind(self):
         self.good_change()
         self.run_gate()

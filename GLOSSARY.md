@@ -74,6 +74,10 @@ _Avoid_: trigger, kick off, schedule
 A node whose run stopped because the orchestrator itself stopped (a crash, a restart, the machine asleep), not because of its own work. It runs again once, then goes to the human.
 _Avoid_: failed (a failure is the node's own), stopped (the human's choice)
 
+**Re-armed**:
+An escalated node the human sent back with the `run` label: it runs again from its first attempt, keeping the lessons of the last run.
+_Avoid_: retried, reset
+
 **Integration branch**:
 The branch nodes merge into, by themselves when their tier allows; production never deploys from it.
 _Avoid_: dev (the branch's name, not the role), staging

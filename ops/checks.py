@@ -79,7 +79,7 @@ def run_commands(commands, wt, name, repo="server", cfg=None):
 
 def check_red(wt, base, files, block, cfg, repo="server"):
     """The node's new tests must fail on the base commit, or they prove nothing."""
-    code = [f for f in files if not matches(f, cfg["tier1"])]
+    code = [f for f in files if not matches(f, cfg["tier1"]) and not matches(f, cfg.get("no_behavior", []))]
     if not code or block.get("red") == "false":
         return []
     tests = [f for f in files if matches(f, TEST_FILE) and (Path(wt) / f).exists()]
