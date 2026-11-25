@@ -300,6 +300,72 @@ class HandBack(ServiceCase):
         self.assertEqual(self.github.removed("run"), ["1"])
 
 
+class Rearm(ServiceCase):
+    """server#99 in the pilot: escalated after 3 attempts, the human fixed the issue and added `run` again,
+    and nothing happened until the state file was reset by hand."""
+
+    def escalate(self, num=1, labels=("run", "status:in-progress"), **kw):
+        node = make_node(num, labels=labels, **kw)
+        self.add(node)
+        self.states[node.id] = {"attempts": 3, "saws": ["a", "b"], "dead_ends": ["tried x"], "feedback": "EXPECTED"}
+        self.service.run.escalate(node, "attempt budget spent")
+        return node
+
+    def run_again(self, node, by=HUMAN):
+        node.labels.append("run")
+        self.github.labelled.setdefault((node.repo, node.number), []).append(by)
+
+    def test_escalating_takes_the_node_out_of_progress(self):
+        node = self.escalate()
+        self.assertIn("status:todo", node.labels)
+        self.assertNotIn("status:in-progress", node.labels)
+        self.service.tick(CFG)
+        self.assertEqual(self.events("interrupted"), [], "an escalated node is not an interrupted one")
+        self.assertEqual(self.started, [])
+
+    def test_the_humans_run_label_runs_an_escalated_node_again_from_zero(self):
+        node = self.escalate()
+        self.run_again(node)
+        self.service.tick(CFG)
+        self.assertEqual(self.started, [("client#1", HUMAN)])
+        state = self.states["client#1"]
+        self.assertEqual((state["attempts"], state["saws"]), (0, []))
+        self.assertEqual((state["dead_ends"], state["feedback"]), (["tried x"], "EXPECTED"), "the lessons stay")
+        self.assertNotIn("needs:human", node.labels)
+        self.assertEqual(self.github.removed("needs:human"), ["1"])
+        [record] = self.events("rearmed")
+        self.assertEqual((record["by"], record["attempts_before"]), (HUMAN, 3))
+        self.assertTrue(any("Run again" in c for c in self.github.comments(1)))
+
+    def test_a_run_label_from_anyone_else_does_not_rearm(self):
+        node = self.escalate()
+        self.run_again(node, by="ts-agent[bot]")
+        self.service.tick(CFG)
+        self.assertEqual(self.started, [])
+        self.assertEqual(self.events("rearmed"), [])
+        self.assertEqual(self.states["client#1"]["attempts"], 3)
+        self.assertIn("needs:human", node.labels)
+        self.assertEqual(len(self.events("dispatch.refused")), 1)
+
+    def test_a_contract_change_still_needs_the_approved_decision(self):
+        body = "## Decision\nPending.\n\n" + BLOCK
+        node = self.escalate(labels=("run", "status:in-progress", "contract-change"), body=body)
+        self.run_again(node)
+        self.service.tick(CFG)
+        self.assertEqual(self.started, [])
+        self.assertEqual(self.events("rearmed"), [])
+
+    def test_a_ready_pr_is_not_run_again(self):
+        node = make_node(1, labels=("status:review",))
+        self.add(node)
+        self.service.run.escalate(node, "Tier 3 PR is green", event="ready")
+        self.run_again(node)
+        self.service.tick(CFG)
+        self.assertEqual(self.started, [])
+        self.assertEqual(self.events("rearmed"), [])
+        self.assertIn("status:review", node.labels, "a ready node keeps its review status")
+
+
 class KillSwitch(ServiceCase):
     def stop(self, *args, boxes=()):
         bin_dir = self.dir / "bin"

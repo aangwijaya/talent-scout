@@ -51,6 +51,14 @@ class TierPolicy(unittest.TestCase):
         for path in CODE:
             self.assertNotEqual(lib.tier_of([path], self.cfg), 1, path)
 
+    def test_no_behavior_never_lists_code(self):
+        """A source file here would let code changes skip the red check."""
+        for path in self.cfg.get("no_behavior", []):
+            self.assertFalse(lib.matches(path, ["*.go", "*.ts", "*.svelte", "*.js", "*.py", "*.sql"]), path)
+            self.assertFalse(any(ch in path for ch in "*?["), f"no_behavior must list exact files: {path}")
+        for path in CODE:
+            self.assertFalse(lib.matches(path, self.cfg.get("no_behavior", [])), path)
+
     def test_automerge_never_includes_tier3(self):
         allowed = {str(t) for t in self.cfg.get("automerge", [])}
         self.assertLessEqual(allowed, {"1", "2"}, f"automerge: {sorted(allowed)}")

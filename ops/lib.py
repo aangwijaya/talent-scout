@@ -107,8 +107,22 @@ def gh_env(cfg=None):
             "GH_PROMPT_DISABLED": "1", "GIT_TERMINAL_PROMPT": "0"}
 
 
+# GitHub's bad minutes: GraphQL's "Something went wrong", gateway errors, dropped connections. They pass on
+# their own, so gh tries again instead of failing the whole tick. A retried comment can, rarely, post twice:
+# a duplicate comment is cheaper than a node left half-updated.
+TRANSIENT_GH = re.compile(r"Something went wrong|\b50[234]\b|Bad Gateway|Service Unavailable|Gateway Time-?out"
+                          r"|timed? ?out|connection reset|unexpected EOF|TLS handshake", re.I)
+GH_RETRY_DELAYS = (3, 10, 30)
+
+
 def gh(*args):
-    return sh(["gh", *args], env=gh_env()).stdout
+    for delay in (*GH_RETRY_DELAYS, None):
+        try:
+            return sh(["gh", *args], env=gh_env()).stdout
+        except RuntimeError as err:
+            if delay is None or not TRANSIENT_GH.search(str(err)):
+                raise
+            time.sleep(delay)
 
 
 def push_argv(full, branch, cfg=None):

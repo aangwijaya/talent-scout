@@ -336,6 +336,11 @@ def escalate(node, reason, feedback_text="", event="escalated"):
     audit(event, node, reason=reason[:500])
     post_handoff(node, f"STATUS: needs_human\nNEXT: {reason}\nKNOWN: {feedback_text or 'see the run log'}")
     gh("issue", "edit", str(node.number), "-R", REPOS[node.repo], "--add-label", "needs:human")
+    if event == "escalated" and node.has("status:in-progress"):
+        # Nothing runs it any more. Left in progress, the service would later take it for an interrupted run.
+        set_status(node, "status:todo")
+    if "needs:human" not in node.labels:
+        node.labels = [*node.labels, "needs:human"]
     drop_run_label(node)
     print(f"{node.id}: escalated: {reason}")
 

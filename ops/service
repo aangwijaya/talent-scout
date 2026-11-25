@@ -29,6 +29,7 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import budget
 import container
 import dispatch
+import ledger
 from lib import HOLD_FILE, OPS, REPOS, ROOT, STATE, STOP_FILE, analyze, config, load_nodes, sh
 
 _loader = importlib.machinery.SourceFileLoader("run", str(OPS / "run"))
@@ -91,6 +92,37 @@ def recover(node, cfg):
     log(f"{node.id}: interrupted, queued to run again")
 
 
+def last_handover(node):
+    """The node's last handover to the human, from the ledger: "escalated", "ready", or "rearmed" once the
+    human sent it back."""
+    events = [r["event"] for _, _, r in ledger.records()
+              if r.get("node") == node.id and r["event"] in ("escalated", "ready", "rearmed")]
+    return events[-1] if events else None
+
+
+def rearm(node, cfg):
+    """The human's `run` label on an escalated node means "run it again" (WORKFLOW.md): the attempts start
+    over, and the feedback and dead ends of the last run stay for the brief. A node whose PR is ready waits for
+    a merge instead, so the label does nothing there. Returns True when the node is ready to dispatch."""
+    if last_handover(node) != "escalated":
+        return False
+    try:
+        actor = dispatch.check(node, cfg["human_login"])
+    except dispatch.Refused as refused:
+        refuse(node, str(refused))
+        return False
+    state = run.load_state(node.id)
+    run.audit("rearmed", node, by=actor, attempts_before=state.get("attempts", 0))
+    run.save_state(node.id, {"attempts": 0, "saws": [], "dead_ends": state.get("dead_ends", []),
+                             **({"feedback": state["feedback"]} if state.get("feedback") else {})})
+    run.gh("issue", "edit", str(node.number), "-R", REPOS[node.repo], "--remove-label", "needs:human")
+    node.labels = [l for l in node.labels if l != "needs:human"]
+    run.set_status(node, "status:todo")
+    run.comment(node, f"🔁 Run again by {actor}: the attempts start over ({cfg['max_attempts']} left).")
+    log(f"{node.id}: re-armed by {actor}")
+    return True
+
+
 def refuse(node, reason):
     run.audit("dispatch.refused", node, reason=reason[:300])
     run.drop_run_label(node)
@@ -128,6 +160,10 @@ def tick(cfg):
         if (not node.closed and node.agent in ("claude", "opencode") and any(node.has(s) for s in ACTIVE)
                 and not node.has("needs:human") and repo_free(node.repo)):
             recover(node, cfg)
+    for node in nodes.values():
+        if (not node.closed and node.agent in ("claude", "opencode") and node.has("needs:human")
+                and node.has(dispatch.RUN_LABEL)):
+            rearm(node, cfg)
     held = run.queue_held(cfg)
     if held:
         return held
