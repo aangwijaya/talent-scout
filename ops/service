@@ -175,8 +175,18 @@ def loop(cfg):
     log("service stopping")
 
 
+def unit_path():
+    """The shell's PATH for the unit, without WSL's Windows dirs: systemd splits Environment= at spaces
+    ("Program Files"), and the orchestrator needs nothing from Windows."""
+    keep = []
+    for d in os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin").split(":"):
+        if d and not d.startswith("/mnt/") and not any(c.isspace() for c in d) and d not in keep:
+            keep.append(d)
+    return ":".join(keep)
+
+
 def unit_text():
-    path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    path = unit_path()
     return f"""[Unit]
 Description=Talent Scout orchestrator (ADR 0007)
 After=network-online.target

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 OPS = Path(__file__).resolve().parent.parent
@@ -352,6 +353,14 @@ class Install(unittest.TestCase):
         self.assertIn("KillMode=control-group", unit)
         self.assertIn("Restart=on-failure", unit)
         self.assertIn("WantedBy=default.target", unit)
+
+    def test_the_path_keeps_only_linux_dirs_without_spaces(self):
+        """systemd splits Environment= at spaces: WSL's Windows dirs ("Program Files") broke the line."""
+        path = "/home/u/.local/bin:/usr/bin:/mnt/c/Program Files/Git/cmd:/usr/bin:/mnt/c/Windows:/bin"
+        with mock.patch.dict(os.environ, {"PATH": path}):
+            unit = load("service").unit_text()
+        line = next(x for x in unit.splitlines() if x.startswith("Environment=PATH="))
+        self.assertEqual(line, "Environment=PATH=/home/u/.local/bin:/usr/bin:/bin")
 
 
 if __name__ == "__main__":
