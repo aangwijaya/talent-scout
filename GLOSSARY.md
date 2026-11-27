@@ -75,7 +75,7 @@ A node whose run stopped because the orchestrator itself stopped (a crash, a res
 _Avoid_: failed (a failure is the node's own), stopped (the human's choice)
 
 **Re-armed**:
-An escalated node the human sent back with the `run` label: it runs again from its first attempt, keeping the lessons of the last run.
+An escalated or ready node the human sent back with the `run` label, a ready one for rework instead of a merge: it runs again from its first attempt on the same branch, keeping the lessons of the last run.
 _Avoid_: retried, reset
 
 **Integration branch**:
