@@ -355,15 +355,48 @@ class Rearm(ServiceCase):
         self.assertEqual(self.started, [])
         self.assertEqual(self.events("rearmed"), [])
 
-    def test_a_ready_pr_is_not_run_again(self):
-        node = make_node(1, labels=("status:review",))
+    def ready(self, num=1, **kw):
+        node = make_node(num, labels=("status:review",), **kw)
         self.add(node)
-        self.service.run.escalate(node, "Tier 3 PR is green", event="ready")
+        self.states[node.id] = {"attempts": 2, "saws": ["a"], "dead_ends": ["tried x"], "feedback": "EXPECTED"}
+        self.service.run.escalate(node, "Tier 3 PR is green. Verifier: rework.", event="ready")
+        return node
+
+    def test_the_humans_run_label_sends_a_ready_node_back_for_rework(self):
+        """server#109 in the pilot: tier 3 was ready with a rework verdict, the human added the rework to the
+        issue and `run` again, and the label sat there for minutes with nothing in the ledger."""
+        node = self.ready()
+        self.assertNotIn("run", node.labels, "ready takes the label off, so adding it again is the human's")
+        self.run_again(node)
+        self.service.tick(CFG)
+        self.assertEqual(self.started, [("client#1", HUMAN)])
+        self.assertEqual(self.states["client#1"]["attempts"], 0)
+        self.assertEqual(self.states["client#1"]["dead_ends"], ["tried x"], "the lessons stay")
+        self.assertNotIn("needs:human", node.labels)
+        self.assertNotIn("status:review", node.labels, "the node is back in the queue, not in review")
+        [record] = self.events("rearmed")
+        self.assertEqual((record["by"], record["after"]), (HUMAN, "ready"))
+        self.assertTrue(any("rework" in c for c in self.github.comments(1)))
+
+    def test_a_ready_contract_change_still_needs_the_approved_decision(self):
+        node = self.ready(body="## Decision\nPending.\n\n" + BLOCK)
+        node.labels.append("contract-change")
         self.run_again(node)
         self.service.tick(CFG)
         self.assertEqual(self.started, [])
         self.assertEqual(self.events("rearmed"), [])
-        self.assertIn("status:review", node.labels, "a ready node keeps its review status")
+
+    def test_a_run_label_that_cannot_rearm_says_why(self):
+        """needs:human with no handover in the ledger (set by hand): the label must not sit there in silence."""
+        node = make_node(1, labels=("needs:human",))
+        self.add(node)
+        self.run_again(node)
+        self.service.tick(CFG)
+        self.assertEqual(self.started, [])
+        self.assertNotIn("run", node.labels)
+        self.assertTrue(any("Not run again" in c for c in self.github.comments(1)))
+        self.service.tick(CFG)
+        self.assertEqual(sum("Not run again" in c for c in self.github.comments(1)), 1, "said once, not every tick")
 
 
 class KillSwitch(ServiceCase):

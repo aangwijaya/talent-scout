@@ -101,10 +101,17 @@ def last_handover(node):
 
 
 def rearm(node, cfg):
-    """The human's `run` label on an escalated node means "run it again" (WORKFLOW.md): the attempts start
-    over, and the feedback and dead ends of the last run stay for the brief. A node whose PR is ready waits for
-    a merge instead, so the label does nothing there. Returns True when the node is ready to dispatch."""
-    if last_handover(node) != "escalated":
+    """The human's `run` label on a node that waits for them means "run it again" (WORKFLOW.md): the attempts
+    start over, and the feedback and dead ends of the last run stay for the brief. That is an escalated node,
+    or a ready one whose PR the human sends back for rework instead of merging; the agent picks up the same
+    branch and PR, and the rework from the issue. A label that can't re-arm comes off with a comment, so it
+    never sits there unexplained. Returns True when the node is ready to dispatch."""
+    handover = last_handover(node)
+    if handover not in ("escalated", "ready"):
+        run.drop_run_label(node)
+        run.comment(node, "⛔ Not run again: this node has no escalation or ready PR on record to send back. "
+                          "Clear `needs:human` and add `run` to start it.")
+        log(f"{node.id}: run label ignored, last handover {handover}")
         return False
     try:
         actor = dispatch.check(node, cfg["human_login"])
@@ -112,14 +119,15 @@ def rearm(node, cfg):
         refuse(node, str(refused))
         return False
     state = run.load_state(node.id)
-    run.audit("rearmed", node, by=actor, attempts_before=state.get("attempts", 0))
+    run.audit("rearmed", node, by=actor, after=handover, attempts_before=state.get("attempts", 0))
     run.save_state(node.id, {"attempts": 0, "saws": [], "dead_ends": state.get("dead_ends", []),
                              **({"feedback": state["feedback"]} if state.get("feedback") else {})})
     run.gh("issue", "edit", str(node.number), "-R", REPOS[node.repo], "--remove-label", "needs:human")
     node.labels = [l for l in node.labels if l != "needs:human"]
     run.set_status(node, "status:todo")
-    run.comment(node, f"🔁 Run again by {actor}: the attempts start over ({cfg['max_attempts']} left).")
-    log(f"{node.id}: re-armed by {actor}")
+    what = "Sent back for rework" if handover == "ready" else "Run again"
+    run.comment(node, f"🔁 {what} by {actor}: the attempts start over ({cfg['max_attempts']} left).")
+    log(f"{node.id}: re-armed by {actor} after {handover}")
     return True
 
 
